@@ -19,9 +19,14 @@ import { getLocale } from '../locales';
 
 const { messages } = getLocale();
 
-export function connectTimelineStream (timelineId, path, pollingRefresh = null, accept = null) {
-
-  return connectStream (path, pollingRefresh, (dispatch, getState) => {
+/**
+ * @param {string} timelineId
+ * @param {string} channelName
+ * @param {object} params
+ * @param {function} accept
+ */
+export const connectTimelineStream = (timelineId, channelName, params = {}, accept = null) =>
+  connectStream(channelName, params, (dispatch, getState) => {
     const locale = getState().getIn(['meta', 'locale']);
 
     return {
@@ -63,17 +68,10 @@ export function connectTimelineStream (timelineId, path, pollingRefresh = null, 
       },
     };
   });
-}
 
-const refreshHomeTimelineAndNotification = (dispatch, done) => {
-  dispatch(expandHomeTimeline({}, () =>
-    dispatch(expandNotifications({}, () =>
-      dispatch(fetchAnnouncements(done))))));
-};
-
-export const connectUserStream      = () => connectTimelineStream('home', 'user', refreshHomeTimelineAndNotification);
+export const connectUserStream      = () => connectTimelineStream('home', 'user');
 export const connectCommunityStream = ({ onlyMedia } = {}) => connectTimelineStream(`community${onlyMedia ? ':media' : ''}`, `public:local${onlyMedia ? ':media' : ''}`);
 export const connectPublicStream    = ({ onlyMedia, onlyRemote } = {}) => connectTimelineStream(`public${onlyRemote ? ':remote' : ''}${onlyMedia ? ':media' : ''}`, `public${onlyRemote ? ':remote' : ''}${onlyMedia ? ':media' : ''}`);
-export const connectHashtagStream   = (id, tag, local, accept) => connectTimelineStream(`hashtag:${id}${local ? ':local' : ''}`, `hashtag${local ? ':local' : ''}&tag=${tag}`, null, accept);
+export const connectHashtagStream   = (columnId, tagName, onlyLocal, accept) => connectTimelineStream(`hashtag:${columnId}${onlyLocal ? ':local' : ''}`, `hashtag${onlyLocal ? ':local' : ''}`, { tag: tagName }, accept);
 export const connectDirectStream    = () => connectTimelineStream('direct', 'direct');
-export const connectListStream      = id => connectTimelineStream(`list:${id}`, `list&list=${id}`);
+export const connectListStream      = listId => connectTimelineStream(`list:${listId}`, 'list', { list: listId });
