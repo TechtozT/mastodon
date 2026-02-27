@@ -1,23 +1,26 @@
 !!! 5
-%html{ lang: I18n.locale }
+%html{ lang: I18n.locale, 'data-contrast': 'auto', 'data-color-scheme': 'light' }
   %head
     %meta{ charset: 'utf-8' }/
     %meta{ name: 'robots', content: 'noindex' }/
 
     - if cdn_host?
       %link{ rel: 'dns-prefetch', href: cdn_host }/
+      %meta{ name: 'cdn-host', content: cdn_host }/
 
     - if storage_host?
       %link{ rel: 'dns-prefetch', href: storage_host }/
 
-    = stylesheet_pack_tag 'common', media: 'all'
-    = stylesheet_pack_tag Setting.default_settings['theme'], media: 'all'
-    = javascript_pack_tag 'common', integrity: true, crossorigin: 'anonymous'
-    = javascript_pack_tag "locale_#{I18n.locale}", integrity: true, crossorigin: 'anonymous'
+    = javascript_inline_tag 'theme-selection.js'
+    = vite_client_tag
+    = vite_react_refresh_tag
+    = vite_polyfills_tag
+    = theme_style_tags 'default'
+    = vite_preload_file_tag "mastodon/locales/#{I18n.locale}.json"
     = render_initial_state
-    = javascript_pack_tag 'public', integrity: true, crossorigin: 'anonymous'
+    = vite_typescript_tag 'embed.tsx', integrity: true, crossorigin: 'anonymous'
   %body.embed
     = yield
 
-    .logo-resources
-      = render file: Rails.root.join('app', 'javascript', 'images', 'logo_transparent.svg')
+    .logo-resources{ 'tabindex' => '-1', 'inert' => true, 'aria-hidden' => 'true' }
+      = inline_svg_tag 'logo-symbol-icon.svg'

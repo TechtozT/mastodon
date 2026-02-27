@@ -1,7 +1,7 @@
 // This code is largely borrowed from:
 // https://github.com/missive/emoji-mart/blob/5f2ffcc/src/utils/index.js
 
-import data from './emoji_mart_data_light';
+import * as data from './emoji_mart_data_light';
 
 const buildSearch = (data) => {
   const search = [];
@@ -73,7 +73,7 @@ const stringFromCodePoint = _String.fromCodePoint || function () {
 
 const _JSON = JSON;
 
-const COLONS_REGEX = /^(?:\:([^\:]+)\:)(?:\:skin-tone-(\d)\:)?$/;
+const COLONS_REGEX = /^(?::([^:]+):)(?::skin-tone-(\d):)?$/;
 const SKINS = [
   '1F3FA', '1F3FB', '1F3FC',
   '1F3FD', '1F3FE', '1F3FF',
@@ -135,19 +135,19 @@ function getData(emoji, skin, set) {
       }
     }
 
-    if (data.short_names.hasOwnProperty(emoji)) {
+    if (Object.hasOwn(data.short_names, emoji)) {
       emoji = data.short_names[emoji];
     }
 
-    if (data.emojis.hasOwnProperty(emoji)) {
+    if (Object.hasOwn(data.emojis, emoji)) {
       emojiData = data.emojis[emoji];
     }
   } else if (emoji.id) {
-    if (data.short_names.hasOwnProperty(emoji.id)) {
+    if (Object.hasOwn(data.short_names, emoji.id)) {
       emoji.id = data.short_names[emoji.id];
     }
 
-    if (data.emojis.hasOwnProperty(emoji.id)) {
+    if (Object.hasOwn(data.emojis, emoji.id)) {
       emojiData = data.emojis[emoji.id];
       skin = skin || emoji.skin;
     }
@@ -209,50 +209,9 @@ function intersect(a, b) {
   return uniqA.filter(item => uniqB.indexOf(item) >= 0);
 }
 
-function deepMerge(a, b) {
-  let o = {};
-
-  for (let key in a) {
-    let originalValue = a[key],
-      value = originalValue;
-
-    if (b.hasOwnProperty(key)) {
-      value = b[key];
-    }
-
-    if (typeof value === 'object') {
-      value = deepMerge(originalValue, value);
-    }
-
-    o[key] = value;
-  }
-
-  return o;
-}
-
-// https://github.com/sonicdoe/measure-scrollbar
-function measureScrollbar() {
-  const div = document.createElement('div');
-
-  div.style.width = '100px';
-  div.style.height = '100px';
-  div.style.overflow = 'scroll';
-  div.style.position = 'absolute';
-  div.style.top = '-9999px';
-
-  document.body.appendChild(div);
-  const scrollbarWidth = div.offsetWidth - div.clientWidth;
-  document.body.removeChild(div);
-
-  return scrollbarWidth;
-}
-
 export {
   getData,
   getSanitizedData,
   uniq,
   intersect,
-  deepMerge,
-  unifiedToNative,
-  measureScrollbar,
 };

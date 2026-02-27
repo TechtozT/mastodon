@@ -1,52 +1,92 @@
 - content_for :page_title do
-  = "##{@tag.name}"
+  = @tag.formatted_name
 
-.dashboard__counters
-  %div
-    = link_to tag_url(@tag), target: '_blank', rel: 'noopener noreferrer' do
-      .dashboard__counters__num= number_with_delimiter @accounts_today
-      .dashboard__counters__label= t 'admin.tags.accounts_today'
-  %div
-    %div
-      .dashboard__counters__num= number_with_delimiter @accounts_week
-      .dashboard__counters__label= t 'admin.tags.accounts_week'
-  %div
-    - if @tag.accounts_count > 0
-      = link_to explore_hashtag_path(@tag) do
-        .dashboard__counters__num= number_with_delimiter @tag.accounts_count
-        .dashboard__counters__label= t 'admin.tags.directory'
-    - else
-      %div
-        .dashboard__counters__num= number_with_delimiter @tag.accounts_count
-        .dashboard__counters__label= t 'admin.tags.directory'
+- content_for :heading_actions do
+  - if current_user.can?(:view_dashboard)
+    .time-period
+      = date_range(@time_period)
 
-%hr.spacer/
+  = link_to t('admin.tags.open'), tag_url(@tag), class: 'button', target: '_blank', rel: 'noopener'
+
+- if current_user.can?(:view_dashboard)
+  .dashboard
+    .dashboard__item
+      = react_admin_component :counter,
+                              end_at: @time_period.last,
+                              href: tag_url(@tag),
+                              label: t('admin.trends.tags.dashboard.tag_accounts_measure'),
+                              measure: 'tag_accounts',
+                              params: { id: @tag.id },
+                              rel: 'noopener',
+                              start_at: @time_period.first,
+                              target: '_blank'
+    .dashboard__item
+      = react_admin_component :counter,
+                              end_at: @time_period.last,
+                              label: t('admin.trends.tags.dashboard.tag_uses_measure'),
+                              measure: 'tag_uses',
+                              params: { id: @tag.id },
+                              start_at: @time_period.first
+    .dashboard__item
+      = react_admin_component :counter,
+                              end_at: @time_period.last,
+                              label: t('admin.trends.tags.dashboard.tag_servers_measure'),
+                              measure: 'tag_servers',
+                              params: { id: @tag.id },
+                              start_at: @time_period.first
+    .dashboard__item
+      = react_admin_component :dimension,
+                              dimension: 'tag_servers',
+                              end_at: @time_period.last,
+                              label: t('admin.trends.tags.dashboard.tag_servers_dimension'),
+                              limit: 8,
+                              params: { id: @tag.id },
+                              start_at: @time_period.first
+    .dashboard__item
+      = react_admin_component :dimension,
+                              dimension: 'tag_languages',
+                              end_at: @time_period.last,
+                              label: t('admin.trends.tags.dashboard.tag_languages_dimension'),
+                              limit: 8,
+                              params: { id: @tag.id },
+                              start_at: @time_period.first
+    .dashboard__item
+      = link_to admin_tag_path(@tag.id), class: ['dashboard__quick-access', @tag.usable? ? 'positive' : 'negative'] do
+        - if @tag.usable?
+          %span= t('admin.trends.tags.usable')
+          = material_symbol 'check'
+        - else
+          %span= t('admin.trends.tags.not_usable')
+          = material_symbol 'lock'
+
+      = link_to admin_tag_path(@tag.id), class: ['dashboard__quick-access', @tag.trendable? ? 'positive' : 'negative'] do
+        - if @tag.trendable?
+          %span= t('admin.trends.tags.trendable')
+          = material_symbol 'check'
+        - else
+          %span= t('admin.trends.tags.not_trendable')
+          = material_symbol 'lock'
+
+      = link_to admin_tag_path(@tag.id), class: ['dashboard__quick-access', @tag.listable? ? 'positive' : 'negative'] do
+        - if @tag.listable?
+          %span= t('admin.trends.tags.listable')
+          = material_symbol 'check'
+        - else
+          %span= t('admin.trends.tags.not_listable')
+          = material_symbol 'lock'
+
+  %hr.spacer/
 
 = simple_form_for @tag, url: admin_tag_path(@tag.id) do |f|
   = render 'shared/error_messages', object: @tag
 
   .fields-group
-    = f.input :name, wrapper: :with_block_label
+    = f.input :display_name, wrapper: :with_block_label
 
   .fields-group
     = f.input :usable, as: :boolean, wrapper: :with_label
-    = f.input :trendable, as: :boolean, wrapper: :with_label, disabled: !Setting.trends
-    = f.input :listable, as: :boolean, wrapper: :with_label, disabled: !Setting.profile_directory
+    = f.input :trendable, as: :boolean, wrapper: :with_label
+    = f.input :listable, as: :boolean, wrapper: :with_label
 
   .actions
     = f.button :button, t('generic.save_changes'), type: :submit
-
-%hr.spacer/
-
-%h3= t 'admin.tags.breakdown'
-
-.table-wrapper
-  %table.table
-    %tbody
-      - total = @usage_by_domain.sum(&:last).to_f
-
-      - @usage_by_domain.each do |(domain, count)|
-        %tr
-          %th= domain || site_hostname
-          %td= number_to_percentage((count / total) * 100, precision: 1)
-          %td= number_with_delimiter count

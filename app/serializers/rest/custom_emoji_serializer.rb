@@ -3,9 +3,12 @@
 class REST::CustomEmojiSerializer < ActiveModel::Serializer
   include RoutingHelper
 
+  # Please update `app/javascript/mastodon/api_types/custom_emoji.ts` when making changes to the attributes
+
   attributes :shortcode, :url, :static_url, :visible_in_picker
 
   attribute :category, if: :category_loaded?
+  attribute :featured, if: :category_loaded?
 
   def url
     full_asset_url(object.image.url)
@@ -17,6 +20,10 @@ class REST::CustomEmojiSerializer < ActiveModel::Serializer
 
   def category
     object.category.name
+  end
+
+  def featured
+    object.featured?
   end
 
   def category_loaded?

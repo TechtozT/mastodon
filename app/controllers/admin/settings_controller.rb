@@ -2,7 +2,7 @@
 
 module Admin
   class SettingsController < BaseController
-    def edit
+    def show
       authorize :settings, :show?
 
       @admin_settings = Form::AdminSettings.new
@@ -14,17 +14,21 @@ module Admin
       @admin_settings = Form::AdminSettings.new(settings_params)
 
       if @admin_settings.save
-        flash[:notice] = I18n.t('generic.changes_saved_msg')
-        redirect_to edit_admin_settings_path
+        redirect_to after_update_redirect_path, notice: t('generic.changes_saved_msg')
       else
-        render :edit
+        render :show
       end
     end
 
     private
 
+    def after_update_redirect_path
+      raise NotImplementedError
+    end
+
     def settings_params
-      params.require(:form_admin_settings).permit(*Form::AdminSettings::KEYS)
+      params
+        .expect(form_admin_settings: [*Form::AdminSettings::KEYS])
     end
   end
 end

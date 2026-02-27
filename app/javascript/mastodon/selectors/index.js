@@ -1,167 +1,125 @@
-import { createSelector } from 'reselect';
-import { List as ImmutableList, is } from 'immutable';
+import { createSelector } from '@reduxjs/toolkit';
+import { List as ImmutableList, Map as ImmutableMap } from 'immutable';
+
 import { me } from '../initial_state';
 
-const getAccountBase         = (state, id) => state.getIn(['accounts', id], null);
-const getAccountCounters     = (state, id) => state.getIn(['accounts_counters', id], null);
-const getAccountRelationship = (state, id) => state.getIn(['relationships', id], null);
-const getAccountMoved        = (state, id) => state.getIn(['accounts', state.getIn(['accounts', id, 'moved'])]);
+import { getFilters } from './filters';
 
-export const makeGetAccount = () => {
-  return createSelector([getAccountBase, getAccountCounters, getAccountRelationship, getAccountMoved], (base, counters, relationship, moved) => {
-    if (base === null) {
-      return null;
-    }
+export { makeGetAccount } from "./accounts";
+export { getStatusList } from "./statuses";
 
-    return base.merge(counters).withMutations(map => {
-      map.set('relationship', relationship);
-      map.set('moved', moved);
-    });
-  });
-};
+const getStatusInputSelectors = [
+  (state, { id }) => state.getIn(['statuses', id]),
+  (state, { id }) => state.getIn(['statuses', state.getIn(['statuses', id, 'reblog'])]),
+  (state, { id }) => state.getIn(['accounts', state.getIn(['statuses', id, 'account'])]),
+  (state, { id }) => state.getIn(['accounts', state.getIn(['statuses', state.getIn(['statuses', id, 'reblog']), 'account'])]),
+  getFilters,
+  (_, { contextType }) => ['detailed', 'bookmarks', 'favourites', 'search'].includes(contextType),
+];
 
-const toServerSideType = columnType => {
-  switch (columnType) {
-  case 'home':
-  case 'notifications':
-  case 'public':
-  case 'thread':
-  case 'account':
-    return columnType;
-  default:
-    if (columnType.indexOf('list:') > -1) {
-      return 'home';
-    } else {
-      return 'public'; // community, account, hashtag
-    }
-  }
-};
-
-const escapeRegExp = string =>
-  string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // $& means the whole matched string
-
-const regexFromFilters = filters => {
-  if (filters.size === 0) {
-    return null;
+function getStatusResultFunction(
+  statusBase,
+  statusReblog,
+  accountBase,
+  accountReblog,
+  filters,
+  warnInsteadOfHide
+) {
+  if (!statusBase) {
+    return {
+      status: null,
+      loadingState: 'not-found',
+    };
   }
 
-  return new RegExp(filters.map(filter => {
-    let expr = escapeRegExp(filter.get('phrase'));
+  // When a status is loading, a `isLoading` property is set
+  // A status can be loading because it is not known yet (in which case it will only contain `isLoading`)
+  // or because it is being re-fetched; in the latter case, `visibility` will always be set to a non-empty
+  // string.
+  if (statusBase.get('isLoading') && !statusBase.get('visibility')) {
+    return {
+      status: null,
+      loadingState: 'loading',
+    }
+  }
 
-    if (filter.get('whole_word')) {
-      if (/^[\w]/.test(expr)) {
-        expr = `\\b${expr}`;
-      }
+  if (statusReblog) {
+    statusReblog = statusReblog.set('account', accountReblog);
+  } else {
+    statusReblog = null;
+  }
 
-      if (/[\w]$/.test(expr)) {
-        expr = `${expr}\\b`;
+  let filtered = false;
+  let mediaFiltered = false;
+  if ((accountReblog || accountBase).get('id') !== me && filters) {
+    let filterResults = statusReblog?.get('filtered') || statusBase.get('filtered') || ImmutableList();
+    if (!warnInsteadOfHide && filterResults.some((result) => filters.getIn([result.get('filter'), 'filter_action']) === 'hide')) {
+      return {
+        status: null,
+        loadingState: 'filtered',
       }
     }
 
-    return expr;
-  }).join('|'), 'i');
-};
-
-// Memoize the filter regexps for each valid server contextType
-const makeGetFiltersRegex = () => {
-  let memo = {};
-
-  return (state, { contextType }) => {
-    if (!contextType) return ImmutableList();
-
-    const serverSideType = toServerSideType(contextType);
-    const filters = state.get('filters', ImmutableList()).filter(filter => filter.get('context').includes(serverSideType) && (filter.get('expires_at') === null || Date.parse(filter.get('expires_at')) > (new Date())));
-
-    if (!memo[serverSideType] || !is(memo[serverSideType].filters, filters)) {
-      const dropRegex = regexFromFilters(filters.filter(filter => filter.get('irreversible')));
-      const regex = regexFromFilters(filters);
-      memo[serverSideType] = { filters: filters, results: [dropRegex, regex] };
+    let mediaFilters = filterResults.filter(result => filters.getIn([result.get('filter'), 'filter_action']) === 'blur');
+    if (!mediaFilters.isEmpty()) {
+      mediaFiltered = mediaFilters.map(result => filters.getIn([result.get('filter'), 'title']));
     }
-    return memo[serverSideType].results;
+
+    filterResults = filterResults.filter(result => filters.has(result.get('filter')) && filters.getIn([result.get('filter'), 'filter_action']) !== 'blur');
+    if (!filterResults.isEmpty()) {
+      filtered = filterResults.map(result => filters.getIn([result.get('filter'), 'title']));
+    }
+  }
+
+  return {
+    status: statusBase.withMutations(map => {
+      map.set('reblog', statusReblog);
+      map.set('account', accountBase);
+      map.set('matched_filters', filtered);
+      map.set('matched_media_filters', mediaFiltered);
+    }),
+    loadingState: statusBase.get('isLoading') ? 'loading' : 'complete'
   };
-};
-
-export const getFiltersRegex = makeGetFiltersRegex();
+}
 
 export const makeGetStatus = () => {
   return createSelector(
-    [
-      (state, { id }) => state.getIn(['statuses', id]),
-      (state, { id }) => state.getIn(['statuses', state.getIn(['statuses', id, 'reblog'])]),
-      (state, { id }) => state.getIn(['accounts', state.getIn(['statuses', id, 'account'])]),
-      (state, { id }) => state.getIn(['accounts', state.getIn(['statuses', state.getIn(['statuses', id, 'reblog']), 'account'])]),
-      getFiltersRegex,
-    ],
-
-    (statusBase, statusReblog, accountBase, accountReblog, filtersRegex) => {
-      if (!statusBase) {
-        return null;
-      }
-
-      if (statusReblog) {
-        statusReblog = statusReblog.set('account', accountReblog);
-      } else {
-        statusReblog = null;
-      }
-
-      const dropRegex = (accountReblog || accountBase).get('id') !== me && filtersRegex[0];
-      if (dropRegex && dropRegex.test(statusBase.get('reblog') ? statusReblog.get('search_index') : statusBase.get('search_index'))) {
-        return null;
-      }
-
-      const regex     = (accountReblog || accountBase).get('id') !== me && filtersRegex[1];
-      const filtered  = regex && regex.test(statusBase.get('reblog') ? statusReblog.get('search_index') : statusBase.get('search_index'));
-
-      return statusBase.withMutations(map => {
-        map.set('reblog', statusReblog);
-        map.set('account', accountBase);
-        map.set('filtered', filtered);
-      });
+    getStatusInputSelectors,
+    (...args) => {
+      const {status} = getStatusResultFunction(...args);
+      return status
     },
   );
 };
 
-const getAlertsBase = state => state.get('alerts');
-
-export const getAlerts = createSelector([getAlertsBase], (base) => {
-  let arr = [];
-
-  base.forEach(item => {
-    arr.push({
-      message: item.get('message'),
-      message_values: item.get('message_values'),
-      title: item.get('title'),
-      key: item.get('key'),
-      dismissAfter: 5000,
-      barStyle: {
-        zIndex: 200,
-      },
-    });
-  });
-
-  return arr;
-});
-
-export const makeGetNotification = () => {
-  return createSelector([
-    (_, base)             => base,
-    (state, _, accountId) => state.getIn(['accounts', accountId]),
-  ], (base, account) => {
-    return base.set('account', account);
-  });
+/**
+ * This selector extends the `makeGetStatus` with a more detailed
+ * `loadingState`, which is useful to find out why `null` is returned
+ * for the `status` field
+ */
+export const makeGetStatusWithExtraInfo = () => {
+  return createSelector(
+    getStatusInputSelectors,
+    getStatusResultFunction,
+  );
 };
 
-export const getAccountGallery = createSelector([
-  (state, id) => state.getIn(['timelines', `account:${id}:media`, 'items'], ImmutableList()),
-  state       => state.get('statuses'),
-  (state, id) => state.getIn(['accounts', id]),
-], (statusIds, statuses, account) => {
-  let medias = ImmutableList();
+export const makeGetPictureInPicture = () => {
+  return createSelector([
+    (state, { id }) => state.picture_in_picture.statusId === id,
+    (state) => state.getIn(['meta', 'layout']) !== 'mobile',
+  ], (inUse, available) => ImmutableMap({
+    inUse: inUse && available,
+    available,
+  }));
+};
 
-  statusIds.forEach(statusId => {
-    const status = statuses.get(statusId);
-    medias = medias.concat(status.get('media_attachments').map(media => media.set('status', status).set('account', account)));
-  });
+export const makeGetNotification = () => createSelector([
+  (_, base)             => base,
+  (state, _, accountId) => state.getIn(['accounts', accountId]),
+], (base, account) => base.set('account', account));
 
-  return medias;
-});
+export const makeGetReport = () => createSelector([
+  (_, base) => base,
+  (state, _, targetAccountId) => state.getIn(['accounts', targetAccountId]),
+], (base, targetAccount) => base.set('target_account', targetAccount));

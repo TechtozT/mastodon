@@ -1,3 +1,5 @@
+@use 'variables' as *;
+
 .table {
   width: 100%;
   max-width: 100%;
@@ -9,15 +11,18 @@
     padding: 8px;
     line-height: 18px;
     vertical-align: top;
-    border-top: 1px solid $ui-base-color;
-    text-align: left;
-    background: darken($ui-base-color, 4%);
+    border-bottom: 1px solid var(--color-border-primary);
+    text-align: start;
+    background: var(--color-bg-primary);
+
+    &.critical {
+      font-weight: 700;
+      color: var(--color-text-warning);
+    }
   }
 
   & > thead > tr > th {
     vertical-align: bottom;
-    border-bottom: 2px solid $ui-base-color;
-    border-top: 0;
     font-weight: 500;
   }
 
@@ -27,15 +32,20 @@
 
   & > tbody > tr:nth-child(odd) > td,
   & > tbody > tr:nth-child(odd) > th {
-    background: $ui-base-color;
+    background: var(--color-bg-primary);
+  }
+
+  & > tbody > tr:last-child > td,
+  & > tbody > tr:last-child > th {
+    border-bottom: 0;
   }
 
   a {
-    color: $highlight-text-color;
-    text-decoration: underline;
+    color: var(--color-text-secondary);
+    text-decoration: none;
 
     &:hover {
-      text-decoration: none;
+      color: var(--color-text-brand);
     }
   }
 
@@ -65,20 +75,38 @@
     }
   }
 
+  &.horizontal-table {
+    border-collapse: collapse;
+    border-style: hidden;
+
+    & > tbody > tr > th,
+    & > tbody > tr > td {
+      padding: 11px 10px;
+      background: transparent;
+      border: 1px solid var(--color-border-primary);
+      color: var(--color-text-primary);
+    }
+
+    & > tbody > tr > th {
+      color: var(--color-text-secondary);
+      font-weight: 600;
+    }
+  }
+
   &.batch-table {
     & > thead > tr > th {
-      background: $ui-base-color;
-      border-top: 1px solid darken($ui-base-color, 8%);
-      border-bottom: 1px solid darken($ui-base-color, 8%);
+      background: var(--color-bg-primary);
+      border-top: 1px solid var(--color-border-primary);
+      border-bottom: 1px solid var(--color-border-primary);
 
       &:first-child {
         border-radius: 4px 0 0;
-        border-left: 1px solid darken($ui-base-color, 8%);
+        border-inline-start: 1px solid var(--color-border-primary);
       }
 
       &:last-child {
         border-radius: 0 4px 0 0;
-        border-right: 1px solid darken($ui-base-color, 8%);
+        border-inline-end: 1px solid var(--color-border-primary);
       }
     }
   }
@@ -107,26 +135,30 @@ button.table-action-link,
 a.table-action-link {
   text-decoration: none;
   display: inline-block;
-  margin-right: 5px;
+  margin-inline-end: 5px;
   padding: 0 10px;
-  color: $darker-text-color;
+  color: var(--color-text-secondary);
   font-weight: 500;
+  white-space: nowrap;
 
   &:hover {
-    color: $primary-text-color;
-  }
-
-  i.fa {
-    font-weight: 400;
-    margin-right: 5px;
+    color: var(--color-text-brand);
   }
 
   &:first-child {
-    padding-left: 0;
+    padding-inline-start: 0;
   }
 }
 
 .batch-table {
+  &--no-toolbar {
+    .batch-table__toolbar {
+      position: static;
+      height: 4px;
+      border-bottom: none;
+    }
+  }
+
   &__toolbar,
   &__row {
     display: flex;
@@ -154,29 +186,85 @@ a.table-action-link {
     &__actions,
     &__content {
       padding: 8px 0;
-      padding-right: 16px;
+      padding-inline-end: 16px;
       flex: 1 1 auto;
     }
   }
 
   &__toolbar {
-    border: 1px solid darken($ui-base-color, 8%);
-    background: $ui-base-color;
-    border-radius: 4px 0 0;
+    position: sticky;
+    top: 0;
+    z-index: 200;
+    border: 1px solid var(--color-border-primary);
+    background: var(--color-bg-primary);
+    border-radius: 4px 4px 0 0;
     height: 47px;
     align-items: center;
 
     &__actions {
-      text-align: right;
-      padding-right: 16px - 5px;
+      text-align: end;
+      padding-inline-end: 16px - 5px;
+
+      .table-action-link {
+        padding: 0;
+      }
+    }
+  }
+
+  &__select-all {
+    background: var(--color-bg-primary);
+    height: 47px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--color-border-primary);
+    border-top: 0;
+    color: var(--color-text-primary);
+    display: none;
+
+    &.active {
+      display: flex;
+    }
+
+    .selected,
+    .not-selected {
+      display: none;
+
+      &.active {
+        display: block;
+      }
+    }
+
+    strong {
+      font-weight: 700;
+    }
+
+    span {
+      padding: 8px;
+      display: inline-block;
+    }
+
+    button {
+      background: transparent;
+      border: 0;
+      font: inherit;
+      color: var(--color-text-brand);
+      border-radius: 4px;
+      font-weight: 700;
+      padding: 8px;
+
+      &:hover,
+      &:focus,
+      &:active {
+        background: var(--color-bg-secondary);
+      }
     }
   }
 
   &__form {
     padding: 16px;
-    border: 1px solid darken($ui-base-color, 8%);
+    border: 1px solid var(--color-border-primary);
     border-top: 0;
-    background: $ui-base-color;
+    background: var(--color-bg-primary);
 
     .fields-row {
       padding-top: 0;
@@ -185,34 +273,31 @@ a.table-action-link {
   }
 
   &__row {
-    border: 1px solid darken($ui-base-color, 8%);
+    border: 1px solid var(--color-border-primary);
     border-top: 0;
-    background: darken($ui-base-color, 4%);
+    background: var(--color-bg-primary);
 
     @media screen and (max-width: $no-gap-breakpoint) {
       .optional &:first-child {
-        border-top: 1px solid darken($ui-base-color, 8%);
+        border-top: 1px solid var(--color-border-primary);
       }
     }
 
-    &:hover {
-      background: darken($ui-base-color, 2%);
-    }
-
-    &:nth-child(even) {
-      background: $ui-base-color;
-
-      &:hover {
-        background: lighten($ui-base-color, 2%);
-      }
+    &:last-child {
+      border-radius: 0 0 4px 4px;
     }
 
     &__content {
       padding-top: 12px;
       padding-bottom: 16px;
+      overflow: hidden;
 
       &--unpadded {
         padding: 0;
+      }
+
+      &--padded {
+        padding: 12px 16px 16px;
       }
 
       &--with-image {
@@ -225,7 +310,7 @@ a.table-action-link {
         display: flex;
         justify-content: center;
         align-items: center;
-        margin-right: 10px;
+        margin-inline-end: 10px;
 
         .emojione {
           width: 32px;
@@ -237,10 +322,15 @@ a.table-action-link {
         flex: 1 1 auto;
       }
 
+      &__quote {
+        padding: 12px;
+        padding-top: 0;
+      }
+
       &__extra {
         flex: 0 0 auto;
-        text-align: right;
-        color: $darker-text-color;
+        text-align: end;
+        color: var(--color-text-secondary);
         font-weight: 500;
       }
     }
@@ -263,31 +353,23 @@ a.table-action-link {
     }
   }
 
-  .status__content {
-    padding-top: 0;
-
-    summary {
-      display: list-item;
-    }
-
-    strong {
-      font-weight: 700;
-    }
+  // Reset the status card to not have borders, background or padding when
+  // inline in the table of statuses
+  .batch-table__row__content > .status__card {
+    border: none;
+    background: none;
+    padding: 0;
   }
 
-  .nothing-here {
-    border: 1px solid darken($ui-base-color, 8%);
-    border-top: 0;
-    box-shadow: none;
-
-    @media screen and (max-width: $no-gap-breakpoint) {
-      border-top: 1px solid darken($ui-base-color, 8%);
-    }
-  }
-
-  @media screen and (max-width: 870px) {
+  @media screen and (width <= 870px) {
     .accounts-table tbody td.optional {
       display: none;
     }
   }
+}
+
+.one-liner {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

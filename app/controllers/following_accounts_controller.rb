@@ -4,25 +4,21 @@ class FollowingAccountsController < ApplicationController
   include AccountControllerConcern
   include SignatureVerification
 
-  before_action :require_signature!, if: -> { request.format == :json && authorized_fetch_mode? }
-  before_action :set_cache_headers
+  vary_by -> { public_fetch_mode? ? 'Accept, Accept-Language, Cookie' : 'Accept, Accept-Language, Cookie, Signature' }
+
+  before_action :require_account_signature!, if: -> { request.format == :json && authorized_fetch_mode? }
+  before_action :protect_hidden_collections, if: -> { request.format.json? }
 
   skip_around_action :set_locale, if: -> { request.format == :json }
-  skip_before_action :require_functional!, unless: :whitelist_mode?
+  skip_before_action :require_functional!, unless: :limited_federation_mode?
 
   def index
     respond_to do |format|
       format.html do
-        expires_in 0, public: true unless user_signed_in?
-
-        next if @account.user_hides_network?
-
-        follows
+        expires_in(15.seconds, public: true, stale_while_revalidate: 30.seconds, stale_if_error: 1.hour) unless user_signed_in?
       end
 
       format.json do
-        raise Mastodon::NotPermittedError if page_requested? && @account.user_hides_network?
-
         expires_in(page_requested? ? 0 : 3.minutes, public: public_fetch_mode?)
 
         render json: collection_presenter,
@@ -44,28 +40,40 @@ class FollowingAccountsController < ApplicationController
     @follows = scope.recent.page(params[:page]).per(FOLLOW_PER_PAGE).preload(:target_account)
   end
 
+  def protect_hidden_collections
+    raise Mastodon::NotPermittedError if page_requested? && @account.hide_collections?
+  end
+
   def page_requested?
     params[:page].present?
   end
 
   def page_url(page)
-    account_following_index_url(@account, page: page) unless page.nil?
+    ActivityPub::TagManager.instance.following_uri_for(@account, page: page) unless page.nil?
+  end
+
+  def next_page_url
+    page_url(follows.next_page) if follows.respond_to?(:next_page)
+  end
+
+  def prev_page_url
+    page_url(follows.prev_page) if follows.respond_to?(:prev_page)
   end
 
   def collection_presenter
     if page_requested?
       ActivityPub::CollectionPresenter.new(
-        id: account_following_index_url(@account, page: params.fetch(:page, 1)),
+        id: page_url(params.fetch(:page, 1)),
         type: :ordered,
         size: @account.following_count,
-        items: follows.map { |f| ActivityPub::TagManager.instance.uri_for(f.target_account) },
-        part_of: account_following_index_url(@account),
-        next: page_url(follows.next_page),
-        prev: page_url(follows.prev_page)
+        items: follows.map { |follow| ActivityPub::TagManager.instance.uri_for(follow.target_account) },
+        part_of: ActivityPub::TagManager.instance.following_uri_for(@account),
+        next: next_page_url,
+        prev: prev_page_url
       )
     else
       ActivityPub::CollectionPresenter.new(
-        id: account_following_index_url(@account),
+        id: ActivityPub::TagManager.instance.following_uri_for(@account),
         type: :ordered,
         size: @account.following_count,
         first: page_url(1)
@@ -74,10 +82,10 @@ class FollowingAccountsController < ApplicationController
   end
 
   def restrict_fields_to
-    if page_requested? || !@account.user_hides_network?
+    if page_requested? || !@account.hide_collections?
       # Return all fields
     else
-      %i(id type totalItems)
+      %i(id type total_items)
     end
   end
 end

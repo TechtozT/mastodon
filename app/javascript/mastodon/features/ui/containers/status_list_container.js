@@ -1,10 +1,13 @@
-import { connect } from 'react-redux';
-import StatusList from '../../../components/status_list';
-import { scrollTopTimeline, loadPending } from '../../../actions/timelines';
+import { createSelector } from '@reduxjs/toolkit';
 import { Map as ImmutableMap, List as ImmutableList } from 'immutable';
-import { createSelector } from 'reselect';
+import { connect } from 'react-redux';
+
 import { debounce } from 'lodash';
-import { me } from '../../../initial_state';
+
+import { scrollTopTimeline, loadPending } from '@/mastodon/actions/timelines';
+import { isNonStatusId } from '@/mastodon/actions/timelines_typed';
+import StatusList from '@/mastodon/components/status_list';
+import { me } from '@/mastodon/initial_state';
 
 const makeGetStatusIds = (pending = false) => createSelector([
   (state, { type }) => state.getIn(['settings', type], ImmutableMap()),
@@ -12,22 +15,25 @@ const makeGetStatusIds = (pending = false) => createSelector([
   (state)           => state.get('statuses'),
 ], (columnSettings, statusIds, statuses) => {
   return statusIds.filter(id => {
-    if (id === null) return true;
+    if (isNonStatusId(id)) return true;
 
     const statusForId = statuses.get(id);
-    let showStatus    = true;
 
     if (statusForId.get('account') === me) return true;
 
-    if (columnSettings.getIn(['shows', 'reblog']) === false) {
-      showStatus = showStatus && statusForId.get('reblog') === null;
+    if (columnSettings.getIn(['shows', 'reblog']) === false && statusForId.get('reblog') !== null) {
+      return false;
     }
 
-    if (columnSettings.getIn(['shows', 'reply']) === false) {
-      showStatus = showStatus && (statusForId.get('in_reply_to_id') === null || statusForId.get('in_reply_to_account_id') === me);
+    if (columnSettings.getIn(['shows', 'reply']) === false && statusForId.get('in_reply_to_id') !== null && statusForId.get('in_reply_to_account_id') !== me) {
+      return false;
     }
 
-    return showStatus;
+    if (columnSettings.getIn(['shows', 'quote']) === false && statusForId.get('quote') !== null) {
+      return false;
+    }
+
+    return true;
   });
 });
 
@@ -35,9 +41,10 @@ const makeMapStateToProps = () => {
   const getStatusIds = makeGetStatusIds();
   const getPendingStatusIds = makeGetStatusIds(true);
 
-  const mapStateToProps = (state, { timelineId }) => ({
+  const mapStateToProps = (state, { timelineId, initialLoadingState = true }) => ({
     statusIds: getStatusIds(state, { type: timelineId }),
-    isLoading: state.getIn(['timelines', timelineId, 'isLoading'], true),
+    lastId:    state.getIn(['timelines', timelineId, 'items'])?.last(),
+    isLoading: state.getIn(['timelines', timelineId, 'isLoading'], initialLoadingState),
     isPartial: state.getIn(['timelines', timelineId, 'isPartial'], false),
     hasMore:   state.getIn(['timelines', timelineId, 'hasMore']),
     numPending: getPendingStatusIds(state, { type: timelineId }).size,

@@ -6,6 +6,8 @@ class AfterBlockService < BaseService
     @target_account = target_account
 
     clear_home_feed!
+    clear_list_feeds!
+    clear_notification_requests!
     clear_notifications!
     clear_conversations!
   end
@@ -13,7 +15,11 @@ class AfterBlockService < BaseService
   private
 
   def clear_home_feed!
-    FeedManager.instance.clear_from_timeline(@account, @target_account)
+    FeedManager.instance.clear_from_home(@account, @target_account)
+  end
+
+  def clear_list_feeds!
+    FeedManager.instance.clear_from_lists(@account, @target_account)
   end
 
   def clear_conversations!
@@ -22,5 +28,9 @@ class AfterBlockService < BaseService
 
   def clear_notifications!
     Notification.where(account: @account).where(from_account: @target_account).in_batches.delete_all
+  end
+
+  def clear_notification_requests!
+    NotificationRequest.where(account: @account, from_account: @target_account).destroy_all
   end
 end

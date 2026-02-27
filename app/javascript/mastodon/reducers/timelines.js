@@ -1,22 +1,32 @@
+import { Map as ImmutableMap, List as ImmutableList, OrderedSet as ImmutableOrderedSet, fromJS } from 'immutable';
+
+
+import {
+  blockAccountSuccess,
+  muteAccountSuccess,
+  unfollowAccountSuccess
+} from '../actions/accounts';
 import {
   TIMELINE_UPDATE,
-  TIMELINE_DELETE,
   TIMELINE_CLEAR,
   TIMELINE_EXPAND_SUCCESS,
   TIMELINE_EXPAND_REQUEST,
   TIMELINE_EXPAND_FAIL,
   TIMELINE_SCROLL_TOP,
   TIMELINE_CONNECT,
-  TIMELINE_DISCONNECT,
   TIMELINE_LOAD_PENDING,
+  TIMELINE_MARK_AS_PARTIAL,
+  TIMELINE_INSERT,
+  TIMELINE_GAP,
+  disconnectTimeline,
 } from '../actions/timelines';
 import {
-  ACCOUNT_BLOCK_SUCCESS,
-  ACCOUNT_MUTE_SUCCESS,
-  ACCOUNT_UNFOLLOW_SUCCESS,
-} from '../actions/accounts';
-import { Map as ImmutableMap, List as ImmutableList, fromJS } from 'immutable';
-import compareId from '../compare_id';
+  timelineDelete,
+  timelineDeleteStatus,
+  isTimelineKeyPinned,
+  isNonStatusId,
+} from '../actions/timelines_typed';
+import { compareId } from '../compare_id';
 
 const initialState = ImmutableMap();
 
@@ -30,14 +40,22 @@ const initialTimeline = ImmutableMap({
   items: ImmutableList(),
 });
 
+
 const expandNormalizedTimeline = (state, timeline, statuses, next, isPartial, isLoadingRecent, usePendingItems) => {
+  // This method is pretty tricky because:
+  // - existing items in the timeline might be out of order
+  // - the existing timeline may have gaps, most often explicitly noted with a `null` item
+  // - ideally, we don't want it to reorder existing items of the timeline
+  // - `statuses` may include items that are already included in the timeline
+  // - this function can be called either to fill in a gap, or load newer items
+
   return state.update(timeline, initialTimeline, map => map.withMutations(mMap => {
     mMap.set('isLoading', false);
     mMap.set('isPartial', isPartial);
 
     if (!next && !isLoadingRecent) mMap.set('hasMore', false);
 
-    if (timeline.endsWith(':pinned')) {
+    if (isTimelineKeyPinned(timeline)) {
       mMap.set('items', statuses.map(status => status.get('id')));
     } else if (!statuses.isEmpty()) {
       usePendingItems = isLoadingRecent && (usePendingItems || !mMap.get('pendingItems').isEmpty());
@@ -45,15 +63,42 @@ const expandNormalizedTimeline = (state, timeline, statuses, next, isPartial, is
       mMap.update(usePendingItems ? 'pendingItems' : 'items', ImmutableList(), oldIds => {
         const newIds = statuses.map(status => status.get('id'));
 
-        const lastIndex = oldIds.findLastIndex(id => id !== null && compareId(id, newIds.last()) >= 0) + 1;
-        const firstIndex = oldIds.take(lastIndex).findLastIndex(id => id !== null && compareId(id, newIds.first()) > 0);
+        // Now this gets tricky, as we don't necessarily know for sure where the gap to fill is
+        // and some items in the timeline may not be properly ordered.
 
-        if (firstIndex < 0) {
-          return (isPartial ? newIds.unshift(null) : newIds).concat(oldIds.skip(lastIndex));
+        // However, we know that `newIds.last()` is the oldest item that was requested and that
+        // there is no “hole” between `newIds.last()` and `newIds.first()`.
+
+        // First, find the furthest (if properly sorted, oldest) item in the timeline that is
+        // newer than the oldest fetched one, as it's most likely that it delimits the gap.
+        // Start the gap *after* that item.
+        const lastIndex = oldIds.findLastIndex(id => !isNonStatusId(id) && compareId(id, newIds.last()) >= 0) + 1;
+
+        // Then, try to find the furthest (if properly sorted, oldest) item in the timeline that
+        // is newer than the most recent fetched one, as it delimits a section comprised of only
+        // items older or within `newIds` (or that were deleted from the server, so should be removed
+        // anyway).
+        // Stop the gap *after* that item.
+        const firstIndex = oldIds.take(lastIndex).findLastIndex(id => !isNonStatusId(id) && compareId(id, newIds.first()) > 0) + 1;
+
+        let insertedIds = ImmutableOrderedSet(newIds).withMutations(insertedIds => {
+          // It is possible, though unlikely, that the slice we are replacing contains items older
+          // than the elements we got from the API. Get them and add them back at the back of the
+          // slice.
+          const olderIds = oldIds.slice(firstIndex, lastIndex).filter(id => !isNonStatusId(id) && compareId(id, newIds.last()) < 0);
+          insertedIds.union(olderIds);
+
+          // Make sure we aren't inserting duplicates
+          insertedIds.subtract(oldIds.take(firstIndex), oldIds.skip(lastIndex));
+        }).toList();
+
+        // Finally, insert a gap marker if the data is marked as partial by the server
+        if (isPartial && (firstIndex === 0 || oldIds.get(firstIndex - 1) !== TIMELINE_GAP)) {
+          insertedIds = insertedIds.unshift(TIMELINE_GAP);
         }
 
-        return oldIds.take(firstIndex + 1).concat(
-          isPartial && oldIds.get(firstIndex) !== null ? newIds.unshift(null) : newIds,
+        return oldIds.take(firstIndex).concat(
+          insertedIds,
           oldIds.skip(lastIndex),
         );
       });
@@ -105,6 +150,11 @@ const deleteStatus = (state, id, references, exclude_account = null) => {
   return state;
 };
 
+const deleteStatusFromTimeline = (state, statusId, timelineKey) => {
+  const helper = list => list.filterNot((status) => status === statusId);
+  return state.updateIn([timelineKey, 'items'], helper).updateIn([timelineKey, 'pendingItems'], helper);
+}
+
 const clearTimeline = (state, timeline) => {
   return state.set(timeline, initialTimeline);
 };
@@ -117,7 +167,7 @@ const filterTimelines = (state, relationship, statuses) => {
       return;
     }
 
-    references = statuses.filter(item => item.get('reblog') === status.get('id')).map(item => item.get('id'));
+    references = statuses.filter(item => item.get('reblog') === status.get('id')).map(item => item.get('id')).valueSeq().toJSON();
     state      = deleteStatus(state, status.get('id'), references, relationship.id);
   });
 
@@ -136,6 +186,17 @@ const updateTop = (state, timeline, top) => {
   }));
 };
 
+const reconnectTimeline = (state, usePendingItems) => {
+  if (state.get('online')) {
+    return state;
+  }
+
+  return state.withMutations(mMap => {
+    mMap.update(usePendingItems ? 'pendingItems' : 'items', items => items.first() ? items.unshift(TIMELINE_GAP) : items);
+    mMap.set('online', true);
+  });
+};
+
 export default function timelines(state = initialState, action) {
   switch(action.type) {
   case TIMELINE_LOAD_PENDING:
@@ -149,26 +210,54 @@ export default function timelines(state = initialState, action) {
     return expandNormalizedTimeline(state, action.timeline, fromJS(action.statuses), action.next, action.partial, action.isLoadingRecent, action.usePendingItems);
   case TIMELINE_UPDATE:
     return updateTimeline(state, action.timeline, fromJS(action.status), action.usePendingItems);
-  case TIMELINE_DELETE:
-    return deleteStatus(state, action.id, action.references, action.reblogOf);
   case TIMELINE_CLEAR:
     return clearTimeline(state, action.timeline);
-  case ACCOUNT_BLOCK_SUCCESS:
-  case ACCOUNT_MUTE_SUCCESS:
-    return filterTimelines(state, action.relationship, action.statuses);
-  case ACCOUNT_UNFOLLOW_SUCCESS:
-    return filterTimeline('home', state, action.relationship, action.statuses);
   case TIMELINE_SCROLL_TOP:
     return updateTop(state, action.timeline, action.top);
   case TIMELINE_CONNECT:
-    return state.update(action.timeline, initialTimeline, map => map.set('online', true));
-  case TIMELINE_DISCONNECT:
+    return state.update(action.timeline, initialTimeline, map => reconnectTimeline(map, action.usePendingItems));
+  case TIMELINE_MARK_AS_PARTIAL:
     return state.update(
       action.timeline,
       initialTimeline,
-      map => map.set('online', false).update(action.usePendingItems ? 'pendingItems' : 'items', items => items.first() ? items.unshift(null) : items),
+      map => map.set('isPartial', true).set('items', ImmutableList()).set('pendingItems', ImmutableList()).set('unread', 0),
+    );
+  case TIMELINE_INSERT:
+    return state.update(
+      action.timeline,
+      initialTimeline,
+      map => map.update('items', ImmutableList(), list => {
+        if (!list.includes(action.key)) {
+          return list.insert(action.index, action.key);
+        }
+
+        return list;
+      })
     );
   default:
+    if (timelineDelete.match(action)) {
+      return deleteStatus(state, action.payload.statusId, action.payload.references, action.payload.reblogOf);
+    } else if (timelineDeleteStatus.match(action)) {
+      return deleteStatusFromTimeline(state, action.payload.statusId, action.payload.timelineKey);
+    } else if (blockAccountSuccess.match(action) || muteAccountSuccess.match(action)) {
+      return filterTimelines(state, action.payload.relationship, action.payload.statuses);
+    } else if (unfollowAccountSuccess.match(action)) {
+      return filterTimeline('home', state, action.payload.relationship, action.payload.statuses);
+    } else if (disconnectTimeline.match(action)) {
+      return state.update(
+        action.payload.timeline,
+        initialTimeline,
+        (map) => map.set('online', false).update(
+          action.payload.usePendingItems
+            ? 'pendingItems'
+            : 'items',
+          items => items.first()
+            ? items.unshift(TIMELINE_GAP)
+            : items
+        ),
+      );
+    }
+
     return state;
   }
-};
+}

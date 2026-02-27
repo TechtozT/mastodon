@@ -2,8 +2,8 @@
 
 module Settings
   module Exports
-    class MutedAccountsController < ApplicationController
-      include ExportControllerConcern
+    class MutedAccountsController < BaseController
+      include Settings::ExportControllerConcern
 
       def index
         send_export_file

@@ -2,8 +2,8 @@
 
 module Settings
   module Exports
-    class BlockedAccountsController < ApplicationController
-      include ExportControllerConcern
+    class BlockedAccountsController < BaseController
+      include Settings::ExportControllerConcern
 
       def index
         send_export_file

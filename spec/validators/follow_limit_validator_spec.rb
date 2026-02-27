@@ -2,49 +2,45 @@
 
 require 'rails_helper'
 
-RSpec.describe FollowLimitValidator, type: :validator do
-  describe '#validate' do
-    before do
-      allow_any_instance_of(described_class).to receive(:limit_reached?).with(account) do
-        limit_reached
-      end
+RSpec.describe FollowLimitValidator do
+  subject { Fabricate.build(:follow) }
 
-      described_class.new.validate(follow)
+  context 'with a nil account' do
+    it { is_expected.to allow_values(nil).for(:account).against(:base) }
+  end
+
+  context 'with a non-local account' do
+    let(:account) { Account.new(domain: 'host.example') }
+
+    it { is_expected.to allow_values(account).for(:account).against(:base) }
+  end
+
+  context 'with a local account' do
+    let(:account) { Account.new }
+
+    context 'when the followers count is under the limit' do
+      before { account.following_count = described_class::LIMIT - 100 }
+
+      it { is_expected.to allow_values(account).for(:account).against(:base) }
     end
 
-    let(:follow)  { double(account: account, errors: errors) }
-    let(:errors)  { double(add: nil) }
-    let(:account) { double(nil?: _nil, local?: local, following_count: 0, followers_count: 0) }
-    let(:_nil)    { true }
-    let(:local)   { false }
+    context 'when the following count is over the limit' do
+      before { account.following_count = described_class::LIMIT + 100 }
 
-    context 'follow.account.nil? || !follow.account.local?' do
-      let(:_nil)    { true }
+      context 'when the followers count is low' do
+        before { account.followers_count = 10 }
 
-      it 'not calls errors.add' do
-        expect(errors).not_to have_received(:add).with(:base, any_args)
-      end
-    end
+        it { is_expected.to_not allow_values(account).for(:account).against(:base).with_message(limit_reached_message) }
 
-    context '!(follow.account.nil? || !follow.account.local?)' do
-      let(:_nil)    { false }
-      let(:local)   { true }
-
-      context 'limit_reached?' do
-        let(:limit_reached) { true }
-
-        it 'calls errors.add' do
-          expect(errors).to have_received(:add)
-            .with(:base, I18n.t('users.follow_limit_reached', limit: FollowLimitValidator::LIMIT))
+        def limit_reached_message
+          I18n.t('users.follow_limit_reached', limit: described_class::LIMIT)
         end
       end
 
-      context '!limit_reached?' do
-        let(:limit_reached) { false }
+      context 'when the followers count is high' do
+        before { account.followers_count = 100_000 }
 
-        it 'not calls errors.add' do
-          expect(errors).not_to have_received(:add).with(:base, any_args)
-        end
+        it { is_expected.to allow_values(account).for(:account).against(:base) }
       end
     end
   end

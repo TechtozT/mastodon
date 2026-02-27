@@ -20,21 +20,20 @@ class ReblogService < BaseService
 
     return reblog unless reblog.nil?
 
-    visibility = begin
-      if reblogged_status.hidden?
-        reblogged_status.visibility
-      else
-        options[:visibility] || account.user&.setting_default_privacy
-      end
-    end
+    visibility = if reblogged_status.hidden?
+                   reblogged_status.visibility
+                 else
+                   options[:visibility] || account.user&.setting_default_privacy
+                 end
 
     reblog = account.statuses.create!(reblog: reblogged_status, text: '', visibility: visibility, rate_limit: options[:with_rate_limit])
 
+    Trends.register!(reblog)
     DistributionWorker.perform_async(reblog.id)
     ActivityPub::DistributionWorker.perform_async(reblog.id)
 
     create_notification(reblog)
-    bump_potential_friendship(account, reblog)
+    increment_statistics
 
     reblog
   end
@@ -44,22 +43,10 @@ class ReblogService < BaseService
   def create_notification(reblog)
     reblogged_status = reblog.reblog
 
-    if reblogged_status.account.local?
-      LocalNotificationWorker.perform_async(reblogged_status.account_id, reblog.id, reblog.class.name)
-    elsif reblogged_status.account.activitypub? && !reblogged_status.account.following?(reblog.account)
-      ActivityPub::DeliveryWorker.perform_async(build_json(reblog), reblog.account_id, reblogged_status.account.inbox_url)
-    end
+    LocalNotificationWorker.perform_async(reblogged_status.account_id, reblog.id, reblog.class.name, 'reblog') if reblogged_status.account.local?
   end
 
-  def bump_potential_friendship(account, reblog)
+  def increment_statistics
     ActivityTracker.increment('activity:interactions')
-
-    return if account.following?(reblog.reblog.account_id)
-
-    PotentialFriendshipTracker.record(account.id, reblog.reblog.account_id, :reblog)
-  end
-
-  def build_json(reblog)
-    Oj.dump(serialize_payload(ActivityPub::ActivityPresenter.from_status(reblog), ActivityPub::ActivitySerializer, signer: reblog.account))
   end
 end

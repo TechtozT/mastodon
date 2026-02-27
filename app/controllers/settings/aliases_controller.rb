@@ -1,9 +1,9 @@
 # frozen_string_literal: true
 
 class Settings::AliasesController < Settings::BaseController
-  layout 'admin'
+  skip_before_action :require_functional!
 
-  before_action :authenticate_user!
+  before_action :require_not_suspended!
   before_action :set_aliases, except: :destroy
   before_action :set_alias, only: :destroy
 
@@ -30,7 +30,7 @@ class Settings::AliasesController < Settings::BaseController
   private
 
   def resource_params
-    params.require(:account_alias).permit(:acct)
+    params.expect(account_alias: [:acct])
   end
 
   def set_alias

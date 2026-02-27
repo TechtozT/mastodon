@@ -1,25 +1,30 @@
+# frozen_string_literal: true
+
+require 'devise/strategies/authenticatable'
+
 Warden::Manager.after_set_user except: :fetch do |user, warden|
-  if user.session_active?(warden.cookies.signed['_session_id'] || warden.raw_session['auth_id'])
-    session_id = warden.cookies.signed['_session_id'] || warden.raw_session['auth_id']
-  else
-    session_id = user.activate_session(warden.request)
-  end
+  session_id = warden.cookies.signed['_session_id'] || warden.raw_session['auth_id']
+  session_id = user.activate_session(warden.request) unless user.session_activations.active?(session_id)
 
   warden.cookies.signed['_session_id'] = {
     value: session_id,
     expires: 1.year.from_now,
     httponly: true,
-    secure: (Rails.env.production? || ENV['LOCAL_HTTPS'] == 'true'),
+    same_site: :lax,
   }
 end
 
 Warden::Manager.after_fetch do |user, warden|
-  if user.session_active?(warden.cookies.signed['_session_id'] || warden.raw_session['auth_id'])
+  session_id = warden.cookies.signed['_session_id'] || warden.raw_session['auth_id']
+
+  if session_id && (session = user.session_activations.find_by(session_id: session_id))
+    session.update(ip: warden.request.remote_ip) if session.ip != warden.request.remote_ip
+
     warden.cookies.signed['_session_id'] = {
-      value: warden.cookies.signed['_session_id'] || warden.raw_session['auth_id'],
+      value: session_id,
       expires: 1.year.from_now,
       httponly: true,
-      secure: (Rails.env.production? || ENV['LOCAL_HTTPS'] == 'true'),
+      same_site: :lax,
     }
   else
     warden.logout
@@ -33,54 +38,66 @@ Warden::Manager.before_logout do |_, warden|
 end
 
 module Devise
-  mattr_accessor :pam_authentication
-  @@pam_authentication = false
-  mattr_accessor :pam_controlled_service
-  @@pam_controlled_service = nil
+  mattr_accessor :pam_authentication, default: false
+  mattr_accessor :pam_controlled_service, default: nil
 
-  mattr_accessor :check_at_sign
-  @@check_at_sign = false
+  mattr_accessor :check_at_sign, default: false
 
-  mattr_accessor :ldap_authentication
-  @@ldap_authentication = false
-  mattr_accessor :ldap_host
-  @@ldap_host = nil
-  mattr_accessor :ldap_port
-  @@ldap_port = nil
-  mattr_accessor :ldap_method
-  @@ldap_method = nil
-  mattr_accessor :ldap_base
-  @@ldap_base = nil
-  mattr_accessor :ldap_uid
-  @@ldap_uid = nil
-  mattr_accessor :ldap_mail
-  @@ldap_mail = nil
-  mattr_accessor :ldap_bind_dn
-  @@ldap_bind_dn = nil
-  mattr_accessor :ldap_password
-  @@ldap_password = nil
-  mattr_accessor :ldap_tls_no_verify
-  @@ldap_tls_no_verify = false
-  mattr_accessor :ldap_search_filter
-  @@ldap_search_filter = nil
-  mattr_accessor :ldap_uid_conversion_enabled
-  @@ldap_uid_conversion_enabled = false
-  mattr_accessor :ldap_uid_conversion_search
-  @@ldap_uid_conversion_search = nil
-  mattr_accessor :ldap_uid_conversion_replace
-  @@ldap_uid_conversion_replace = nil
+  mattr_accessor :ldap_authentication, default: false
+  mattr_accessor :ldap_host, default: nil
+  mattr_accessor :ldap_port, default: nil
+  mattr_accessor :ldap_method, default: nil
+  mattr_accessor :ldap_base, default: nil
+  mattr_accessor :ldap_uid, default: nil
+  mattr_accessor :ldap_mail, default: nil
+  mattr_accessor :ldap_bind_dn, default: nil
+  mattr_accessor :ldap_password, default: nil
+  mattr_accessor :ldap_tls_no_verify, default: false
+  mattr_accessor :ldap_search_filter, default: nil
+  mattr_accessor :ldap_uid_conversion_enabled, default: false
+  mattr_accessor :ldap_uid_conversion_search, default: nil
+  mattr_accessor :ldap_uid_conversion_replace, default: nil
 
-  class Strategies::PamAuthenticatable
-    def valid?
-      super && ::Devise.pam_authentication
+  module Strategies
+    class PamAuthenticatable
+      def valid?
+        super && ::Devise.pam_authentication
+      end
+    end
+
+    class SessionActivationRememberable < Authenticatable
+      def valid?
+        @session_cookie = nil
+        session_cookie.present?
+      end
+
+      def authenticate!
+        resource = SessionActivation.find_by(session_id: session_cookie)&.user
+
+        unless resource
+          cookies.delete('_session_id')
+          return pass
+        end
+
+        success!(resource) if validate(resource)
+      end
+
+      private
+
+      def session_cookie
+        @session_cookie ||= cookies.signed['_session_id']
+      end
     end
   end
 end
+
+Warden::Strategies.add(:session_activation_rememberable, Devise::Strategies::SessionActivationRememberable)
 
 Devise.setup do |config|
   config.warden do |manager|
     manager.default_strategies(scope: :user).unshift :two_factor_ldap_authenticatable if Devise.ldap_authentication
     manager.default_strategies(scope: :user).unshift :two_factor_pam_authenticatable  if Devise.pam_authentication
+    manager.default_strategies(scope: :user).unshift :session_activation_rememberable
     manager.default_strategies(scope: :user).unshift :two_factor_authenticatable
     manager.default_strategies(scope: :user).unshift :two_factor_backupable
   end
@@ -88,9 +105,9 @@ Devise.setup do |config|
   # The secret key used by Devise. Devise uses this key to generate
   # random tokens. Changing this key will render invalid all existing
   # confirmation, reset password and unlock tokens in the database.
-  # Devise will use the `secret_key_base` on Rails 4+ applications as its `secret_key`
+  # Devise will use the `secret_key_base` as its `secret_key`
   # by default. You can change it below and use your own secret key.
-  # config.secret_key = '2f86974c4dd7735170fd70fbf399f7a477ffd635ef240d07a22cf4bd7cd13dbae17c4383a2996d0c1e79a991ec18a91a17424c53e4771adb75a8b21904bd1403'
+  # config.secret_key = '<%= SecureRandom.hex(64) %>'
 
   # ==> Mailer Configuration
   # Configure the e-mail address which will be shown in Devise::Mailer,
@@ -125,7 +142,7 @@ Devise.setup do |config|
   # config.request_keys = []
 
   # Configure which authentication keys should be case-insensitive.
-  # These keys will be downcased upon creating or modifying a user and when used
+  # These keys will be lowercased upon creating or modifying a user and when used
   # to authenticate or find a user. Default is :email.
   config.case_insensitive_keys = [:email]
 
@@ -139,13 +156,15 @@ Devise.setup do |config|
   # given strategies, for example, `config.params_authenticatable = [:database]` will
   # enable it only for database (email + password) authentication.
   # config.params_authenticatable = true
+  config.params_authenticatable = true
 
   # Tell if authentication through HTTP Auth is enabled. False by default.
   # It can be set to an array that will enable http authentication only for the
   # given strategies, for example, `config.http_authenticatable = [:database]` will
   # enable it only for database authentication. The supported strategies are:
   # :database      = Support basic authentication with authentication key + password
-  config.http_authenticatable = [:pam, :database]
+  # config.http_authenticatable = [:pam, :database]
+  config.http_authenticatable = false
 
   # If 401 status code should be returned for AJAX requests. True by default.
   # config.http_authenticatable_on_xhr = true
@@ -229,7 +248,7 @@ Devise.setup do |config|
 
   # Options to be passed to the created cookie. For instance, you can set
   # secure: true in order to force SSL only cookies.
-  config.rememberable_options = { secure: true }
+  config.rememberable_options = {}
 
   # ==> Configuration for :validatable
   # Range for password length.
@@ -356,9 +375,9 @@ Devise.setup do |config|
     config.usernamefield          = nil
     config.emailfield             = 'email'
     config.check_at_sign          = true
-    config.pam_default_suffix     = ENV.fetch('PAM_EMAIL_DOMAIN') { ENV['LOCAL_DOMAIN'] }
+    config.pam_default_suffix     = ENV.fetch('PAM_EMAIL_DOMAIN') { ENV.fetch('LOCAL_DOMAIN', nil) }
     config.pam_default_service    = ENV.fetch('PAM_DEFAULT_SERVICE') { 'rpam' }
-    config.pam_controlled_service = ENV.fetch('PAM_CONTROLLED_SERVICE') { nil }
+    config.pam_controlled_service = ENV.fetch('PAM_CONTROLLED_SERVICE', nil).presence
   end
 
   if ENV['LDAP_ENABLED'] == 'true'
@@ -373,7 +392,7 @@ Devise.setup do |config|
     config.ldap_uid            = ENV.fetch('LDAP_UID', 'cn')
     config.ldap_mail           = ENV.fetch('LDAP_MAIL', 'mail')
     config.ldap_tls_no_verify  = ENV['LDAP_TLS_NO_VERIFY'] == 'true'
-    config.ldap_search_filter  = ENV.fetch('LDAP_SEARCH_FILTER', '(|(%{uid}=%{email})(%{mail}=%{email}))')
+    config.ldap_search_filter  = ENV.fetch('LDAP_SEARCH_FILTER', '(|(%<uid>s=%<email>s)(%<mail>s=%<email>s))')
     config.ldap_uid_conversion_enabled  = ENV['LDAP_UID_CONVERSION_ENABLED'] == 'true'
     config.ldap_uid_conversion_search   = ENV.fetch('LDAP_UID_CONVERSION_SEARCH', '.,- ')
     config.ldap_uid_conversion_replace  = ENV.fetch('LDAP_UID_CONVERSION_REPLACE', '_')

@@ -1,33 +1,31 @@
 # frozen_string_literal: true
 
 class Settings::FeaturedTagsController < Settings::BaseController
-  layout 'admin'
-
-  before_action :authenticate_user!
   before_action :set_featured_tags, only: :index
   before_action :set_featured_tag, except: [:index, :create]
-  before_action :set_most_used_tags, only: :index
+  before_action :set_recently_used_tags, only: :index
+
+  RECENT_TAGS_LIMIT = 10
 
   def index
     @featured_tag = FeaturedTag.new
   end
 
   def create
-    @featured_tag = current_account.featured_tags.new(featured_tag_params)
-    @featured_tag.reset_data
+    @featured_tag = CreateFeaturedTagService.new.call(current_account, featured_tag_params[:name], raise_error: false)
 
-    if @featured_tag.save
+    if @featured_tag.valid?
       redirect_to settings_featured_tags_path
     else
       set_featured_tags
-      set_most_used_tags
+      set_recently_used_tags
 
       render :index
     end
   end
 
   def destroy
-    @featured_tag.destroy!
+    RemoveFeaturedTagService.new.call(current_account, @featured_tag)
     redirect_to settings_featured_tags_path
   end
 
@@ -41,11 +39,11 @@ class Settings::FeaturedTagsController < Settings::BaseController
     @featured_tags = current_account.featured_tags.order(statuses_count: :desc).reject(&:new_record?)
   end
 
-  def set_most_used_tags
-    @most_used_tags = Tag.most_used(current_account).where.not(id: @featured_tags.map(&:id)).limit(10)
+  def set_recently_used_tags
+    @recently_used_tags = Tag.suggestions_for_account(current_account).limit(RECENT_TAGS_LIMIT)
   end
 
   def featured_tag_params
-    params.require(:featured_tag).permit(:name)
+    params.expect(featured_tag: [:name])
   end
 end

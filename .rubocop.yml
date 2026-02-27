@@ -1,142 +1,36 @@
-require:
-  - rubocop-rails
-
+---
 AllCops:
-  TargetRubyVersion: 2.4
+  CacheRootDirectory: tmp
+  DisplayStyleGuide: true
   Exclude:
-  - 'spec/**/*'
-  - 'db/**/*'
-  - 'app/views/**/*'
-  - 'config/**/*'
-  - 'bin/*'
-  - 'Rakefile'
-  - 'node_modules/**/*'
-  - 'Vagrantfile'
-  - 'vendor/**/*'
-  - 'lib/json_ld/*'
-  - 'lib/templates/**/*'
+    - Vagrantfile
+    - config/initializers/json_ld*
+    - lib/mastodon/migration_helpers.rb
+  ExtraDetails: true
+  NewCops: enable
+  TargetRubyVersion: 3.2 # Oldest supported ruby version
 
-Bundler/OrderedGems:
-  Enabled: false
+inherit_from:
+  - .rubocop/layout.yml
+  - .rubocop/metrics.yml
+  - .rubocop/naming.yml
+  - .rubocop/rails.yml
+  - .rubocop/rspec_rails.yml
+  - .rubocop/rspec.yml
+  - .rubocop/style.yml
+  - .rubocop/i18n.yml
+  - .rubocop/custom.yml
+  - .rubocop_todo.yml
+  - .rubocop/strict.yml
 
-Layout/AccessModifierIndentation:
-  EnforcedStyle: indent
+inherit_mode:
+  merge:
+    - Exclude
 
-Layout/EmptyLineAfterMagicComment:
-  Enabled: false
-
-Layout/SpaceInsideHashLiteralBraces:
-  EnforcedStyle: space
-
-Lint/UselessAccessModifier:
-  ContextCreatingMethods:
-    - class_methods
-
-Metrics/AbcSize:
-  Max: 100
-
-Metrics/BlockLength:
-  Max: 35
-  Exclude:
-    - 'lib/tasks/**/*'
-
-Metrics/BlockNesting:
-  Max: 3
-
-Metrics/ClassLength:
-  CountComments: false
-  Max: 300
-
-Metrics/CyclomaticComplexity:
-  Max: 25
-
-Layout/LineLength:
-  AllowURI: true
-  Enabled: false
-
-Metrics/MethodLength:
-  CountComments: false
-  Max: 55
-
-Metrics/ModuleLength:
-  CountComments: false
-  Max: 200
-
-Metrics/ParameterLists:
-  Max: 5
-  CountKeywordArgs: true
-
-Metrics/PerceivedComplexity:
-  Max: 20
-
-Naming/MemoizedInstanceVariableName:
-  Enabled: false
-
-Rails:
-  Enabled: true
-
-Rails/EnumHash:
-  Enabled: false
-
-Rails/HasAndBelongsToMany:
-  Enabled: false
-
-Rails/SkipsModelValidations:
-  Enabled: false
-
-Rails/HttpStatus:
-  Enabled: false
-
-Rails/Exit:
-  Exclude:
-    - 'lib/mastodon/*'
-    - 'lib/cli.rb'
-
-Rails/HelperInstanceVariable:
-  Enabled: false
-
-Style/ClassAndModuleChildren:
-  Enabled: false
-
-Style/CollectionMethods:
-  Enabled: true
-  PreferredMethods:
-    find_all: 'select'
-
-Style/Documentation:
-  Enabled: false
-
-Style/DoubleNegation:
-  Enabled: true
-
-Style/FormatStringToken:
-  Enabled: false
-
-Style/FrozenStringLiteralComment:
-  Enabled: true
-
-Style/GuardClause:
-  Enabled: false
-
-Style/Lambda:
-  Enabled: false
-
-Style/PercentLiteralDelimiters:
-  PreferredDelimiters:
-    '%i': '()'
-    '%w': '()'
-
-Style/PerlBackrefs:
-  AutoCorrect: false
-
-Style/RegexpLiteral:
-  Enabled: false
-
-Style/SymbolArray:
-  Enabled: false
-
-Style/TrailingCommaInArrayLiteral:
-  EnforcedStyleForMultiline: 'comma'
-
-Style/TrailingCommaInHashLiteral:
-  EnforcedStyleForMultiline: 'comma'
+plugins:
+  - rubocop-capybara
+  - rubocop-i18n
+  - rubocop-performance
+  - rubocop-rails
+  - rubocop-rspec
+  - rubocop-rspec_rails

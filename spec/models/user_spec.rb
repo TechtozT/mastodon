@@ -1,38 +1,36 @@
+# frozen_string_literal: true
+
 require 'rails_helper'
 require 'devise_two_factor/spec_helpers'
 
-RSpec.describe User, type: :model do
+RSpec.describe User do
+  subject { described_class.new(account: account) }
+
+  let(:password) { 'abcd1234' }
+  let(:account) { Fabricate(:account, username: 'alice') }
+
   it_behaves_like 'two_factor_backupable'
+  it_behaves_like 'User::Activity'
+  it_behaves_like 'User::Confirmation'
 
   describe 'otp_secret' do
-    it 'is encrypted with OTP_SECRET environment variable' do
-      user = Fabricate(:user,
-                       encrypted_otp_secret: "Fttsy7QAa0edaDfdfSz094rRLAxc8cJweDQ4BsWH/zozcdVA8o9GLqcKhn2b\nGi/V\n",
-                       encrypted_otp_secret_iv: 'rys3THICkr60BoWC',
-                       encrypted_otp_secret_salt: '_LMkAGvdg7a+sDIKjI3mR2Q==')
+    it 'encrypts the saved value' do
+      user = Fabricate(:user, otp_secret: '123123123')
 
-      expect(user.otp_secret).to eq 'anotpsecretthatshouldbeencrypted'
+      user.reload
+
+      expect(user.otp_secret).to eq '123123123'
+      expect(user.attributes_before_type_cast[:otp_secret]).to_not eq '123123123'
     end
   end
 
-  describe 'validations' do
-    it 'is invalid without an account' do
-      user = Fabricate.build(:user, account: nil)
-      user.valid?
-      expect(user).to model_have_error_on_field(:account)
-    end
+  describe 'Associations' do
+    it { is_expected.to belong_to(:account).required }
+    it { is_expected.to have_many(:login_activities) }
+  end
 
-    it 'is invalid without a valid locale' do
-      user = Fabricate.build(:user, locale: 'toto')
-      user.valid?
-      expect(user).to model_have_error_on_field(:locale)
-    end
-
-    it 'is invalid without a valid email' do
-      user = Fabricate.build(:user, email: 'john@')
-      user.valid?
-      expect(user).to model_have_error_on_field(:email)
-    end
+  describe 'Validations' do
+    it { is_expected.to_not allow_value('john@').for(:email) }
 
     it 'is valid with an invalid e-mail that has already been saved' do
       user = Fabricate.build(:user, email: 'invalid-email')
@@ -40,44 +38,54 @@ RSpec.describe User, type: :model do
       expect(user.valid?).to be true
     end
 
-    it 'cleans out empty string from languages' do
-      user = Fabricate.build(:user, chosen_languages: [''])
-      user.valid?
-      expect(user.chosen_languages).to eq nil
+    it { is_expected.to allow_value('admin@localhost').for(:email) }
+
+    context 'when registration form time is present' do
+      subject { Fabricate.build :user }
+
+      before { stub_const 'RegistrationFormTimeValidator::REGISTRATION_FORM_MIN_TIME', 3.seconds }
+
+      it { is_expected.to allow_value(10.seconds.ago).for(:registration_form_time) }
+      it { is_expected.to_not allow_value(1.second.ago).for(:registration_form_time).against(:base) }
     end
   end
 
-  describe 'scopes' do
+  describe 'Normalizations' do
+    describe 'locale' do
+      it { is_expected.to_not normalize(:locale).from('en') }
+      it { is_expected.to normalize(:locale).from('toto').to(nil) }
+    end
+
+    describe 'time_zone' do
+      it { is_expected.to_not normalize(:time_zone).from('UTC') }
+      it { is_expected.to normalize(:time_zone).from('toto').to(nil) }
+    end
+
+    describe 'chosen_languages' do
+      it { is_expected.to normalize(:chosen_languages).from(['en', 'fr', '']).to(%w(en fr)) }
+      it { is_expected.to normalize(:chosen_languages).from(['']).to(nil) }
+    end
+  end
+
+  describe 'scopes', :inline_jobs do
     describe 'recent' do
       it 'returns an array of recent users ordered by id' do
-        user_1 = Fabricate(:user)
-        user_2 = Fabricate(:user)
-        expect(User.recent).to eq [user_2, user_1]
+        first_user = Fabricate(:user)
+        second_user = Fabricate(:user)
+        expect(described_class.recent).to eq [second_user, first_user]
       end
     end
 
-    describe 'admins' do
-      it 'returns an array of users who are admin' do
-        user_1 = Fabricate(:user, admin: false)
-        user_2 = Fabricate(:user, admin: true)
-        expect(User.admins).to match_array([user_2])
-      end
-    end
+    describe 'account_not_suspended' do
+      it 'returns with linked accounts that are not suspended' do
+        suspended_account = Fabricate(:account, suspended_at: 10.days.ago)
+        non_suspended_account = Fabricate(:account, suspended_at: nil)
+        suspended_user = Fabricate(:user, account: suspended_account)
+        non_suspended_user = Fabricate(:user, account: non_suspended_account)
 
-    describe 'confirmed' do
-      it 'returns an array of users who are confirmed' do
-        user_1 = Fabricate(:user, confirmed_at: nil)
-        user_2 = Fabricate(:user, confirmed_at: Time.zone.now)
-        expect(User.confirmed).to match_array([user_2])
-      end
-    end
-
-    describe 'inactive' do
-      it 'returns a relation of inactive users' do
-        specified = Fabricate(:user, current_sign_in_at: 15.days.ago)
-        Fabricate(:user, current_sign_in_at: 6.days.ago)
-
-        expect(User.inactive).to match_array([specified])
+        expect(described_class.account_not_suspended)
+          .to include(non_suspended_user)
+          .and not_include(suspended_user)
       end
     end
 
@@ -86,61 +94,153 @@ RSpec.describe User, type: :model do
         specified = Fabricate(:user, email: 'specified@spec')
         Fabricate(:user, email: 'unspecified@spec')
 
-        expect(User.matches_email('specified')).to match_array([specified])
+        expect(described_class.matches_email('specified')).to contain_exactly(specified)
+      end
+    end
+
+    describe 'matches_ip' do
+      it 'returns a relation of users whose ip address is matching with the given CIDR' do
+        user1 = Fabricate(:user)
+        user2 = Fabricate(:user)
+        Fabricate(:session_activation, user: user1, ip: '2160:2160::22', session_id: '1')
+        Fabricate(:session_activation, user: user1, ip: '2160:2160::23', session_id: '2')
+        Fabricate(:session_activation, user: user2, ip: '2160:8888::24', session_id: '3')
+        Fabricate(:session_activation, user: user2, ip: '2160:8888::25', session_id: '4')
+
+        expect(described_class.matches_ip('2160:2160::/32')).to contain_exactly(user1)
       end
     end
   end
 
-  let(:account) { Fabricate(:account, username: 'alice') }
-  let(:password) { 'abcd1234' }
+  describe 'email domains denylist integration' do
+    around do |example|
+      original = Rails.configuration.x.email_domains_denylist
 
-  describe 'blacklist' do
-    around(:each) do |example|
-      old_blacklist = Rails.configuration.x.email_blacklist
-
-      Rails.configuration.x.email_domains_blacklist = 'mvrht.com'
+      Rails.configuration.x.email_domains_denylist = 'mvrht.com'
 
       example.run
 
-      Rails.configuration.x.email_domains_blacklist = old_blacklist
+      Rails.configuration.x.email_domains_denylist = original
     end
 
-    it 'should allow a non-blacklisted user to be created' do
-      user = User.new(email: 'foo@example.com', account: account, password: password, agreement: true)
+    it 'allows a user with an email domain that is not on the denylist to be created' do
+      user = described_class.new(email: 'foo@example.com', account: account, password: password, agreement: true)
 
-      expect(user.valid?).to be_truthy
+      expect(user).to be_valid
     end
 
-    it 'should not allow a blacklisted user to be created' do
-      user = User.new(email: 'foo@mvrht.com', account: account, password: password, agreement: true)
+    it 'does not allow a user with an email domain on the deylist to be created' do
+      user = described_class.new(email: 'foo@mvrht.com', account: account, password: password, agreement: true)
 
-      expect(user.valid?).to be_falsey
+      expect(user).to_not be_valid
     end
 
-    it 'should not allow a subdomain blacklisted user to be created' do
-      user = User.new(email: 'foo@mvrht.com.topdomain.tld', account: account, password: password, agreement: true)
+    it 'does not allow a user with an email where the subdomain is on the denylist to be created' do
+      user = described_class.new(email: 'foo@mvrht.com.topdomain.tld', account: account, password: password, agreement: true)
 
-      expect(user.valid?).to be_falsey
-    end
-  end
-
-  describe '#confirmed?' do
-    it 'returns true when a confirmed_at is set' do
-      user = Fabricate.build(:user, confirmed_at: Time.now.utc)
-      expect(user.confirmed?).to be true
-    end
-
-    it 'returns false if a confirmed_at is nil' do
-      user = Fabricate.build(:user, confirmed_at: nil)
-      expect(user.confirmed?).to be false
+      expect(user).to_not be_valid
     end
   end
 
-  describe '#confirm' do
-    it 'sets email to unconfirmed_email' do
-      user = Fabricate.build(:user, confirmed_at: Time.now.utc, unconfirmed_email: 'new-email@example.com')
-      user.confirm
-      expect(user.email).to eq 'new-email@example.com'
+  describe '#email_domain' do
+    subject { described_class.new(email: email).email_domain }
+
+    context 'when value is nil' do
+      let(:email) { nil }
+
+      it { is_expected.to be_nil }
+    end
+
+    context 'when value is blank' do
+      let(:email) { '' }
+
+      it { is_expected.to be_nil }
+    end
+
+    context 'when value has valid domain' do
+      let(:email) { 'user@host.example' }
+
+      it { is_expected.to eq('host.example') }
+    end
+
+    context 'when value has no split' do
+      let(:email) { 'user$host.example' }
+
+      it { is_expected.to be_nil }
+    end
+  end
+
+  describe '#update_sign_in!' do
+    context 'with an existing user' do
+      let!(:user) { Fabricate :user, last_sign_in_at: 10.days.ago, current_sign_in_at:, sign_in_count: 123 }
+      let(:current_sign_in_at) { 1.hour.ago }
+
+      context 'with new sign in false' do
+        it 'updates timestamps but not counts' do
+          expect { user.update_sign_in!(new_sign_in: false) }
+            .to change(user, :last_sign_in_at).to(current_sign_in_at)
+            .and change(user, :current_sign_in_at)
+            .and not_change(user, :sign_in_count)
+        end
+      end
+
+      context 'with new sign in true' do
+        it 'updates timestamps and counts' do
+          expect { user.update_sign_in!(new_sign_in: true) }
+            .to change(user, :last_sign_in_at).to(current_sign_in_at)
+            .and change(user, :current_sign_in_at)
+            .and change(user, :sign_in_count).by(1)
+        end
+      end
+
+      context 'when the user does not have a current_sign_in_at value' do
+        let(:current_sign_in_at) { nil }
+
+        before { travel_to(1.minute.ago) }
+
+        it 'updates last sign in to now' do
+          expect { user.update_sign_in! }
+            .to change(user, :last_sign_in_at).to(Time.now.utc)
+        end
+      end
+    end
+
+    context 'with a new user' do
+      let(:user) { Fabricate.build :user }
+
+      it 'does not persist the user' do
+        expect { user.update_sign_in! }
+          .to_not change(user, :persisted?).from(false)
+      end
+    end
+  end
+
+  describe '#approve!' do
+    subject { user.approve! }
+
+    before do
+      Setting.registrations_mode = 'approved'
+      allow(TriggerWebhookWorker).to receive(:perform_async)
+    end
+
+    context 'when the user is already confirmed' do
+      let(:user) { Fabricate(:user, confirmed_at: Time.now.utc, approved: false) }
+
+      it 'sets the approved flag and triggers `account.approved` web hook' do
+        expect { subject }.to change { user.reload.approved? }.to(true)
+
+        expect(TriggerWebhookWorker).to have_received(:perform_async).with('account.approved', 'Account', user.account_id).once
+      end
+    end
+
+    context 'when the user is not confirmed' do
+      let(:user) { Fabricate(:user, confirmed_at: nil, approved: false) }
+
+      it 'sets the approved flag and does not trigger web hook' do
+        expect { subject }.to change { user.reload.approved? }.to(true)
+
+        expect(TriggerWebhookWorker).to_not have_received(:perform_async).with('account.approved', 'Account', user.account_id)
+      end
     end
   end
 
@@ -149,6 +249,12 @@ RSpec.describe User, type: :model do
       user = Fabricate.build(:user, otp_required_for_login: true)
       user.disable_two_factor!
       expect(user.reload.otp_required_for_login).to be false
+    end
+
+    it 'saves nil for otp_secret' do
+      user = Fabricate.build(:user, otp_secret: 'oldotpcode')
+      user.disable_two_factor!
+      expect(user.reload.otp_secret).to be_nil
     end
 
     it 'saves cleared otp_backup_codes' do
@@ -169,14 +275,14 @@ RSpec.describe User, type: :model do
       user = Fabricate(:user)
       ActiveJob::Base.queue_adapter = :test
 
-      expect { user.send_confirmation_instructions }.to have_enqueued_job(ActionMailer::DeliveryJob)
+      expect { user.send_confirmation_instructions }.to have_enqueued_job(ActionMailer::MailDeliveryJob)
     end
   end
 
   describe 'settings' do
-    it 'is instance of Settings::ScopedSettings' do
+    it 'is instance of UserSettings' do
       user = Fabricate(:user)
-      expect(user.settings).to be_kind_of Settings::ScopedSettings
+      expect(user.settings).to be_a UserSettings
     end
   end
 
@@ -188,141 +294,112 @@ RSpec.describe User, type: :model do
     end
 
     it "returns 'private' if user has not configured default privacy setting and account is locked" do
-      user = Fabricate(:user, account: Fabricate(:account, locked: true))
+      user = Fabricate(:account, locked: true).user
       expect(user.setting_default_privacy).to eq 'private'
     end
 
     it "returns 'public' if user has not configured default privacy setting and account is not locked" do
-      user = Fabricate(:user, account: Fabricate(:account, locked: false))
+      user = Fabricate(:account, locked: false).user
       expect(user.setting_default_privacy).to eq 'public'
     end
   end
 
-  describe 'whitelist' do
-    around(:each) do |example|
-      old_whitelist = Rails.configuration.x.email_whitelist
+  describe 'allowlist integration' do
+    around do |example|
+      original = Rails.configuration.x.email_domains_allowlist
 
-      Rails.configuration.x.email_domains_whitelist = 'mastodon.space'
+      Rails.configuration.x.email_domains_allowlist = 'mastodon.space'
 
       example.run
 
-      Rails.configuration.x.email_domains_whitelist = old_whitelist
+      Rails.configuration.x.email_domains_allowlist = original
     end
 
-    it 'should not allow a user to be created unless they are whitelisted' do
-      user = User.new(email: 'foo@example.com', account: account, password: password, agreement: true)
-      expect(user.valid?).to be_falsey
+    it 'does not allow a user to be created when their email is not on the allowlist' do
+      user = described_class.new(email: 'foo@example.com', account: account, password: password, agreement: true)
+      expect(user).to_not be_valid
     end
 
-    it 'should allow a user to be created if they are whitelisted' do
-      user = User.new(email: 'foo@mastodon.space', account: account, password: password, agreement: true)
-      expect(user.valid?).to be_truthy
+    it 'allows a user to be created when their email is on the allowlist' do
+      user = described_class.new(email: 'foo@mastodon.space', account: account, password: password, agreement: true)
+      expect(user).to be_valid
     end
 
-    it 'should not allow a user with a whitelisted top domain as subdomain in their email address to be created' do
-      user = User.new(email: 'foo@mastodon.space.userdomain.com', account: account, password: password, agreement: true)
-      expect(user.valid?).to be_falsey
+    it 'does not allow a user with an email subdomain included on the top level domain allowlist to be created' do
+      user = described_class.new(email: 'foo@mastodon.space.userdomain.com', account: account, password: password, agreement: true)
+      expect(user).to_not be_valid
     end
 
-    context do
+    context 'with a subdomain on the denylist' do
       around do |example|
-        old_blacklist = Rails.configuration.x.email_blacklist
+        original = Rails.configuration.x.email_domains_denylist
         example.run
-        Rails.configuration.x.email_domains_blacklist = old_blacklist
+        Rails.configuration.x.email_domains_denylist = original
       end
 
-      it 'should not allow a user to be created with a specific blacklisted subdomain even if the top domain is whitelisted' do
-        Rails.configuration.x.email_domains_blacklist = 'blacklisted.mastodon.space'
+      it 'does not allow a user to be created with an email subdomain on the denylist even if the top domain is on the allowlist' do
+        Rails.configuration.x.email_domains_denylist = 'denylisted.mastodon.space'
 
-        user = User.new(email: 'foo@blacklisted.mastodon.space', account: account, password: password)
-        expect(user.valid?).to be_falsey
+        user = described_class.new(email: 'foo@denylisted.mastodon.space', account: account, password: password)
+        expect(user).to_not be_valid
       end
     end
   end
 
-  it_behaves_like 'Settings-extended' do
-    def create!
-      User.create!(account: Fabricate(:account), email: 'foo@mastodon.space', password: 'abcd1234', agreement: true)
-    end
-
-    def fabricate
-      Fabricate(:user)
-    end
-  end
-
-  describe 'token_for_app' do
+  describe '#token_for_app' do
     let(:user) { Fabricate(:user) }
-    let(:app) { Fabricate(:application, owner: user) }
 
-    it 'returns a token' do
-      expect(user.token_for_app(app)).to be_a(Doorkeeper::AccessToken)
+    context 'when user owns app but does not have tokens' do
+      let(:app) { Fabricate(:application, owner: user) }
+
+      it 'creates and returns a persisted token' do
+        expect { user.token_for_app(app) }
+          .to change(Doorkeeper::AccessToken.where(resource_owner_id: user.id, application: app), :count).by(1)
+      end
     end
 
-    it 'persists a token' do
-      t = user.token_for_app(app)
-      expect(user.token_for_app(app)).to eql(t)
+    context 'when user owns app and already has tokens' do
+      let(:app) { Fabricate(:application, owner: user) }
+      let!(:token) { Fabricate :access_token, application: app, resource_owner_id: user.id }
+
+      it 'returns a persisted token' do
+        expect(user.token_for_app(app))
+          .to be_a(Doorkeeper::AccessToken)
+          .and eq(token)
+      end
     end
 
-    it 'is nil if user does not own app' do
-      app.update!(owner: nil)
+    context 'when user does not own app' do
+      let(:app) { Fabricate(:application) }
 
-      expect(user.token_for_app(app)).to be_nil
-    end
-  end
-
-  describe '#role' do
-    it 'returns admin for admin' do
-      user = User.new(admin: true)
-      expect(user.role).to eq 'admin'
+      it 'returns nil' do
+        expect(user.token_for_app(app))
+          .to be_nil
+      end
     end
 
-    it 'returns moderator for moderator' do
-      user = User.new(moderator: true)
-      expect(user.role).to eq 'moderator'
-    end
-
-    it 'returns user otherwise' do
-      user = User.new
-      expect(user.role).to eq 'user'
-    end
-  end
-
-  describe '#role?' do
-    it 'returns false when invalid role requested' do
-      user = User.new(admin: true)
-      expect(user.role?('disabled')).to be false
-    end
-
-    it 'returns true when exact role match' do
-      user  = User.new
-      mod   = User.new(moderator: true)
-      admin = User.new(admin: true)
-
-      expect(user.role?('user')).to be true
-      expect(mod.role?('moderator')).to be true
-      expect(admin.role?('admin')).to be true
-    end
-
-    it 'returns true when role higher than needed' do
-      mod   = User.new(moderator: true)
-      admin = User.new(admin: true)
-
-      expect(mod.role?('user')).to be true
-      expect(admin.role?('user')).to be true
-      expect(admin.role?('moderator')).to be true
+    context 'when app is nil' do
+      it 'returns nil' do
+        expect(user.token_for_app(nil))
+          .to be_nil
+      end
     end
   end
 
   describe '#disable!' do
     subject(:user) { Fabricate(:user, disabled: false, current_sign_in_at: current_sign_in_at, last_sign_in_at: nil) }
+
     let(:current_sign_in_at) { Time.zone.now }
 
-    before do
-      user.disable!
-    end
-
     it 'disables user' do
+      allow(redis).to receive(:publish)
+
+      user.disable!
+
       expect(user).to have_attributes(disabled: true)
+
+      expect(redis)
+        .to have_received(:publish).with("timeline:system:#{user.account.id}", Oj.dump(event: :kill)).once
     end
   end
 
@@ -338,147 +415,91 @@ RSpec.describe User, type: :model do
     end
   end
 
-  describe '#confirm!' do
-    subject(:user) { Fabricate(:user, confirmed_at: confirmed_at) }
+  describe '#reset_password!' do
+    subject(:user) { Fabricate(:user, password: original_password) }
 
-    before do
-      ActionMailer::Base.deliveries.clear
-      user.confirm!
+    let(:original_password) { 'foobar12345' }
+
+    let!(:session_activation) { Fabricate(:session_activation, user: user) }
+    let!(:access_token) { Fabricate(:access_token, resource_owner_id: user.id) }
+    let!(:web_push_subscription) { Fabricate(:web_push_subscription, access_token: access_token) }
+
+    let(:redis_pipeline_stub) { instance_double(Redis::PipelinedConnection, publish: nil) }
+
+    before { stub_redis }
+
+    it 'changes the password immediately and revokes related access' do
+      expect { user.reset_password! }
+        .to remove_activated_sessions
+        .and remove_active_user_tokens
+        .and remove_user_web_subscriptions
+
+      expect(user)
+        .to_not be_external_or_valid_password(original_password)
+      expect { session_activation.reload }
+        .to raise_error(ActiveRecord::RecordNotFound)
+      expect { web_push_subscription.reload }
+        .to raise_error(ActiveRecord::RecordNotFound)
+      expect(redis_pipeline_stub)
+        .to have_received(:publish).with("timeline:access_token:#{access_token.id}", Oj.dump(event: :kill)).once
     end
 
-    after { ActionMailer::Base.deliveries.clear }
+    def remove_activated_sessions
+      change(user.session_activations, :count).to(0)
+    end
+
+    def remove_active_user_tokens
+      change { Doorkeeper::AccessToken.active_for(user).count }.to(0)
+    end
+
+    def remove_user_web_subscriptions
+      change { Web::PushSubscription.where(user: user).or(Web::PushSubscription.where(access_token: access_token)).count }.to(0)
+    end
+
+    def stub_redis
+      allow(redis)
+        .to receive(:pipelined)
+        .and_yield(redis_pipeline_stub)
+    end
+  end
+
+  describe '#mark_email_as_confirmed!' do
+    subject { user.mark_email_as_confirmed! }
+
+    let!(:user) { Fabricate(:user, confirmed_at: confirmed_at) }
 
     context 'when user is new' do
       let(:confirmed_at) { nil }
 
-      it 'confirms user' do
-        expect(user.confirmed_at).to be_present
-      end
+      it 'confirms user and delivers welcome email', :inline_jobs do
+        emails = capture_emails { subject }
 
-      it 'delivers mails' do
-        expect(ActionMailer::Base.deliveries.count).to eq 2
+        expect(user.confirmed_at).to be_present
+        expect(emails.size)
+          .to eq(1)
+        expect(emails.first)
+          .to have_attributes(
+            to: contain_exactly(user.email),
+            subject: eq(I18n.t('user_mailer.welcome.subject'))
+          )
       end
     end
 
     context 'when user is not new' do
       let(:confirmed_at) { Time.zone.now }
 
-      it 'confirms user' do
+      it 'confirms user but does not deliver welcome email' do
+        emails = capture_emails { subject }
+
         expect(user.confirmed_at).to be_present
-      end
-
-      it 'does not deliver mail' do
-        expect(ActionMailer::Base.deliveries.count).to eq 0
-      end
-    end
-  end
-
-  describe '#promote!' do
-    subject(:user) { Fabricate(:user, admin: is_admin, moderator: is_moderator) }
-
-    before do
-      user.promote!
-    end
-
-    context 'when user is an admin' do
-      let(:is_admin) { true }
-
-      context 'when user is a moderator' do
-        let(:is_moderator) { true }
-
-        it 'changes moderator filed false' do
-          expect(user).to be_admin
-          expect(user).not_to be_moderator
-        end
-      end
-
-      context 'when user is not a moderator' do
-        let(:is_moderator) { false }
-
-        it 'does not change status' do
-          expect(user).to be_admin
-          expect(user).not_to be_moderator
-        end
-      end
-    end
-
-    context 'when user is not admin' do
-      let(:is_admin) { false }
-
-      context 'when user is a moderator' do
-        let(:is_moderator) { true }
-
-        it 'changes user into an admin' do
-          expect(user).to be_admin
-          expect(user).not_to be_moderator
-        end
-      end
-
-      context 'when user is not a moderator' do
-        let(:is_moderator) { false }
-
-        it 'changes user into a moderator' do
-          expect(user).not_to be_admin
-          expect(user).to be_moderator
-        end
-      end
-    end
-  end
-
-  describe '#demote!' do
-    subject(:user) { Fabricate(:user, admin: admin, moderator: moderator) }
-
-    before do
-      user.demote!
-    end
-
-    context 'when user is an admin' do
-      let(:admin) { true }
-
-      context 'when user is a moderator' do
-        let(:moderator) { true }
-
-        it 'changes user into a moderator' do
-          expect(user).not_to be_admin
-          expect(user).to be_moderator
-        end
-      end
-
-      context 'when user is not a moderator' do
-        let(:moderator) { false }
-
-        it 'changes user into a moderator' do
-          expect(user).not_to be_admin
-          expect(user).to be_moderator
-        end
-      end
-    end
-
-    context 'when user is not an admin' do
-      let(:admin) { false }
-
-      context 'when user is a moderator' do
-        let(:moderator) { true }
-
-        it 'changes user into a plain user' do
-          expect(user).not_to be_admin
-          expect(user).not_to be_moderator
-        end
-      end
-
-      context 'when user is not a moderator' do
-        let(:moderator) { false }
-
-        it 'does not change any fields' do
-          expect(user).not_to be_admin
-          expect(user).not_to be_moderator
-        end
+        expect(emails).to be_empty
       end
     end
   end
 
   describe '#active_for_authentication?' do
     subject { user.active_for_authentication? }
+
     let(:user) { Fabricate(:user, disabled: disabled, confirmed_at: confirmed_at) }
 
     context 'when user is disabled' do
@@ -511,6 +532,55 @@ RSpec.describe User, type: :model do
 
         it { is_expected.to be true }
       end
+    end
+  end
+
+  describe '.those_who_can' do
+    before { Fabricate(:moderator_user) }
+
+    context 'when there are not any user roles' do
+      before { UserRole.destroy_all }
+
+      it 'returns an empty list' do
+        expect(described_class.those_who_can(:manage_blocks)).to eq([])
+      end
+    end
+
+    context 'when there are not users with the needed role' do
+      it 'returns an empty list' do
+        expect(described_class.those_who_can(:manage_blocks)).to eq([])
+      end
+    end
+
+    context 'when there are users with roles' do
+      let!(:admin_user) { Fabricate(:admin_user) }
+
+      it 'returns the users with the role' do
+        expect(described_class.those_who_can(:manage_blocks)).to eq([admin_user])
+      end
+    end
+  end
+
+  describe '#applications_last_used' do
+    let!(:user) { Fabricate(:user) }
+
+    let!(:never_used_application) { Fabricate :application, owner: user }
+    let!(:application_one) { Fabricate :application, owner: user }
+    let!(:application_two) { Fabricate :application, owner: user }
+
+    before do
+      _other_user_token = Fabricate :access_token, last_used_at: 3.days.ago
+      _never_used_token = Fabricate :access_token, application: never_used_application, resource_owner_id: user.id, last_used_at: nil
+      _app_one_old_token = Fabricate :access_token, application: application_one, resource_owner_id: user.id, last_used_at: 5.days.ago
+      _app_one_new_token = Fabricate :access_token, application: application_one, resource_owner_id: user.id, last_used_at: 1.day.ago
+      _never_used_token = Fabricate :access_token, application: application_two, resource_owner_id: user.id, last_used_at: 5.days.ago
+    end
+
+    it 'returns a hash of unique applications with last used values' do
+      expect(user.applications_last_used)
+        .to include(application_one.id => be_within(1.0).of(1.day.ago))
+        .and include(application_two.id => be_within(1.0).of(5.days.ago))
+        .and not_include(never_used_application.id)
     end
   end
 end

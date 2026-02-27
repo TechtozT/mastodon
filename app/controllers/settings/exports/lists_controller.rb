@@ -2,8 +2,8 @@
 
 module Settings
   module Exports
-    class ListsController < ApplicationController
-      include ExportControllerConcern
+    class ListsController < BaseController
+      include Settings::ExportControllerConcern
 
       def index
         send_export_file

@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+
 # == Schema Information
 #
 # Table name: custom_emojis
@@ -21,35 +22,42 @@
 #
 
 class CustomEmoji < ApplicationRecord
-  LIMIT = 50.kilobytes
+  include Attachmentable
+
+  LIMIT = 256.kilobytes
+  MINIMUM_SHORTCODE_SIZE = 2
+  MAX_SHORTCODE_SIZE = 128
+  MAX_FEDERATED_SHORTCODE_SIZE = 2048
 
   SHORTCODE_RE_FRAGMENT = '[a-zA-Z0-9_]{2,}'
 
   SCAN_RE = /(?<=[^[:alnum:]:]|\n|^)
     :(#{SHORTCODE_RE_FRAGMENT}):
     (?=[^[:alnum:]:]|$)/x
+  SHORTCODE_ONLY_RE = /\A#{SHORTCODE_RE_FRAGMENT}\z/
 
-  IMAGE_MIME_TYPES = %w(image/png image/gif).freeze
+  IMAGE_MIME_TYPES = %w(image/png image/gif image/webp).freeze
 
   belongs_to :category, class_name: 'CustomEmojiCategory', optional: true
-  has_one :local_counterpart, -> { where(domain: nil) }, class_name: 'CustomEmoji', primary_key: :shortcode, foreign_key: :shortcode
 
-  has_attached_file :image, styles: { static: { format: 'png', convert_options: '-coalesce -strip' } }
+  has_one :local_counterpart, -> { where(domain: nil) }, class_name: 'CustomEmoji', primary_key: :shortcode, foreign_key: :shortcode, inverse_of: false, dependent: nil
 
-  before_validation :downcase_domain
+  has_attached_file :image, styles: { static: { format: 'png', convert_options: '-coalesce +profile "!icc,*" +set date:modify +set date:create +set date:timestamp', file_geometry_parser: FastGeometryParser } }, validate_media_type: false, processors: [:lazy_thumbnail]
+
+  normalizes :domain, with: ->(domain) { domain.downcase.strip }
 
   validates_attachment :image, content_type: { content_type: IMAGE_MIME_TYPES }, presence: true, size: { less_than: LIMIT }
-  validates :shortcode, uniqueness: { scope: :domain }, format: { with: /\A#{SHORTCODE_RE_FRAGMENT}\z/ }, length: { minimum: 2 }
+  validates :shortcode, uniqueness: { scope: :domain }, format: { with: SHORTCODE_ONLY_RE }, length: { minimum: MINIMUM_SHORTCODE_SIZE, maximum: MAX_FEDERATED_SHORTCODE_SIZE }
+  validates :shortcode, length: { maximum: MAX_SHORTCODE_SIZE }, if: :local?
 
   scope :local, -> { where(domain: nil) }
   scope :remote, -> { where.not(domain: nil) }
+  scope :enabled, -> { where(disabled: false) }
   scope :alphabetic, -> { order(domain: :asc, shortcode: :asc) }
-  scope :by_domain_and_subdomains, ->(domain) { where(domain: domain).or(where(arel_table[:domain].matches('%.' + domain))) }
-  scope :listed, -> { local.where(disabled: false).where(visible_in_picker: true) }
+  scope :by_domain_and_subdomains, ->(domain) { where(domain: domain).or(where(arel_table[:domain].matches("%.#{domain}"))) }
+  scope :listed, -> { local.enabled.where(visible_in_picker: true) }
 
   remotable_attachment :image, LIMIT
-
-  include Attachmentable
 
   after_commit :remove_entity_cache
 
@@ -61,10 +69,18 @@ class CustomEmoji < ApplicationRecord
     :emoji
   end
 
+  def featured?
+    category&.featured_emoji_id == id
+  end
+
   def copy!
     copy = self.class.find_or_initialize_by(domain: nil, shortcode: shortcode)
     copy.image = image
     copy.tap(&:save!)
+  end
+
+  def to_log_human_identifier
+    shortcode
   end
 
   class << self
@@ -79,7 +95,7 @@ class CustomEmoji < ApplicationRecord
     end
 
     def search(shortcode)
-      where('"custom_emojis"."shortcode" ILIKE ?', "%#{shortcode}%")
+      where(arel_table[:shortcode].matches("%#{sanitize_sql_like(shortcode)}%"))
     end
   end
 
@@ -87,9 +103,5 @@ class CustomEmoji < ApplicationRecord
 
   def remove_entity_cache
     Rails.cache.delete(EntityCache.instance.to_key(:emoji, shortcode, domain))
-  end
-
-  def downcase_domain
-    self.domain = domain.downcase unless domain.nil?
   end
 end

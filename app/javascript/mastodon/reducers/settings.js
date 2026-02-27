@@ -1,11 +1,13 @@
-import { SETTING_CHANGE, SETTING_SAVE } from '../actions/settings';
-import { NOTIFICATIONS_FILTER_SET } from '../actions/notifications';
+import { Map as ImmutableMap, fromJS } from 'immutable';
+
 import { COLUMN_ADD, COLUMN_REMOVE, COLUMN_MOVE, COLUMN_PARAMS_CHANGE } from '../actions/columns';
-import { STORE_HYDRATE } from '../actions/store';
+import { COMPOSE_LANGUAGE_CHANGE } from '../actions/compose';
 import { EMOJI_USE } from '../actions/emojis';
 import { LIST_DELETE_SUCCESS, LIST_FETCH_FAIL } from '../actions/lists';
-import { Map as ImmutableMap, fromJS } from 'immutable';
-import uuid from '../uuid';
+import { NOTIFICATIONS_FILTER_SET } from '../actions/notifications';
+import { SETTING_CHANGE, SETTING_SAVE } from '../actions/settings';
+import { STORE_HYDRATE } from '../actions/store';
+import { uuid } from '../uuid';
 
 const initialState = ImmutableMap({
   saved: true,
@@ -18,6 +20,7 @@ const initialState = ImmutableMap({
 
   home: ImmutableMap({
     shows: ImmutableMap({
+      quote: true,
       reblog: true,
       reply: true,
     }),
@@ -29,12 +32,17 @@ const initialState = ImmutableMap({
 
   notifications: ImmutableMap({
     alerts: ImmutableMap({
-      follow: true,
+      follow: false,
       follow_request: false,
-      favourite: true,
-      reblog: true,
-      mention: true,
-      poll: true,
+      favourite: false,
+      reblog: false,
+      quote: false,
+      mention: false,
+      poll: false,
+      status: false,
+      update: false,
+      'admin.sign_up': false,
+      'admin.report': false,
     }),
 
     quickFilter: ImmutableMap({
@@ -43,13 +51,22 @@ const initialState = ImmutableMap({
       advanced: false,
     }),
 
+    dismissPermissionBanner: false,
+    showUnread: true,
+    minimizeFilteredBanner: false,
+
     shows: ImmutableMap({
       follow: true,
       follow_request: false,
       favourite: true,
       reblog: true,
+      quote: true,
       mention: true,
       poll: true,
+      status: true,
+      update: true,
+      'admin.sign_up': true,
+      'admin.report': true,
     }),
 
     sounds: ImmutableMap({
@@ -57,9 +74,22 @@ const initialState = ImmutableMap({
       follow_request: false,
       favourite: true,
       reblog: true,
+      quote: true,
       mention: true,
       poll: true,
+      status: true,
+      update: true,
+      'admin.sign_up': true,
+      'admin.report': true,
     }),
+
+    group: ImmutableMap({
+      follow: true
+    }),
+  }),
+
+  firehose: ImmutableMap({
+    onlyMedia: false,
   }),
 
   community: ImmutableMap({
@@ -78,6 +108,17 @@ const initialState = ImmutableMap({
     regex: ImmutableMap({
       body: '',
     }),
+  }),
+
+  dismissed_banners: ImmutableMap({
+    'public_timeline': false,
+    'community_timeline': false,
+    'home/follow-suggestions': false,
+    'explore/links': false,
+    'explore/statuses': false,
+    'explore/tags': false,
+    'notifications/remove_quote_hint': false,
+    'quote/quiet_post_hint': false,
   }),
 });
 
@@ -117,6 +158,8 @@ const changeColumnParams = (state, uuid, path, value) => {
 
 const updateFrequentEmojis = (state, emoji) => state.update('frequentlyUsedEmojis', ImmutableMap(), map => map.update(emoji.id, 0, count => count + 1)).set('saved', false);
 
+const updateFrequentLanguages = (state, language) => state.update('frequentlyUsedLanguages', ImmutableMap(), map => map.update(language, 0, count => count + 1)).set('saved', false);
+
 const filterDeadListColumns = (state, listId) => state.update('columns', columns => columns.filterNot(column => column.get('id') === 'LIST' && column.get('params').get('id') === listId));
 
 export default function settings(state = initialState, action) {
@@ -142,6 +185,8 @@ export default function settings(state = initialState, action) {
     return changeColumnParams(state, action.uuid, action.path, action.value);
   case EMOJI_USE:
     return updateFrequentEmojis(state, action.emoji);
+  case COMPOSE_LANGUAGE_CHANGE:
+    return updateFrequentLanguages(state, action.language);
   case SETTING_SAVE:
     return state.set('saved', true);
   case LIST_FETCH_FAIL:
@@ -151,4 +196,4 @@ export default function settings(state = initialState, action) {
   default:
     return state;
   }
-};
+}

@@ -1,13 +1,9 @@
 # frozen_string_literal: true
 
 class Settings::DeletesController < Settings::BaseController
-  layout 'admin'
-
-  before_action :check_enabled_deletion
-  before_action :authenticate_user!
-  before_action :require_not_suspended!
-
   skip_before_action :require_functional!
+
+  before_action :require_not_suspended!
 
   def show
     @confirmation = Form::DeleteConfirmation.new
@@ -24,16 +20,12 @@ class Settings::DeletesController < Settings::BaseController
 
   private
 
-  def check_enabled_deletion
-    redirect_to root_path unless Setting.open_deletion
-  end
-
   def resource_params
-    params.require(:form_delete_confirmation).permit(:password, :username)
+    params.expect(form_delete_confirmation: [:password, :username])
   end
 
   def require_not_suspended!
-    forbidden if current_account.suspended?
+    forbidden if current_account.unavailable?
   end
 
   def challenge_passed?
@@ -45,8 +37,8 @@ class Settings::DeletesController < Settings::BaseController
   end
 
   def destroy_account!
-    current_account.suspend!
-    Admin::SuspensionWorker.perform_async(current_user.account_id, true)
+    current_account.suspend!(origin: :local, block_email: false)
+    AccountDeletionWorker.perform_async(current_user.account_id)
     sign_out
   end
 end

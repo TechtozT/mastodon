@@ -1,11 +1,8 @@
 # frozen_string_literal: true
 
-class Api::V1::Statuses::PinsController < Api::BaseController
-  include Authorization
-
+class Api::V1::Statuses::PinsController < Api::V1::Statuses::BaseController
   before_action -> { doorkeeper_authorize! :write, :'write:accounts' }
   before_action :require_user!
-  before_action :set_status
 
   def create
     StatusPin.create!(account: current_account, status: @status)
@@ -26,14 +23,10 @@ class Api::V1::Statuses::PinsController < Api::BaseController
 
   private
 
-  def set_status
-    @status = Status.find(params[:status_id])
-  end
-
   def distribute_add_activity!
     json = ActiveModelSerializers::SerializableResource.new(
       @status,
-      serializer: ActivityPub::AddSerializer,
+      serializer: ActivityPub::AddNoteSerializer,
       adapter: ActivityPub::Adapter
     ).as_json
 
@@ -43,7 +36,7 @@ class Api::V1::Statuses::PinsController < Api::BaseController
   def distribute_remove_activity!
     json = ActiveModelSerializers::SerializableResource.new(
       @status,
-      serializer: ActivityPub::RemoveSerializer,
+      serializer: ActivityPub::RemoveNoteSerializer,
       adapter: ActivityPub::Adapter
     ).as_json
 

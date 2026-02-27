@@ -1,52 +1,112 @@
+# frozen_string_literal: true
+
 require 'rails_helper'
 
-describe FollowerAccountsController do
+RSpec.describe FollowerAccountsController do
   render_views
 
   let(:alice) { Fabricate(:account, username: 'alice') }
-  let(:follower0) { Fabricate(:account) }
-  let(:follower1) { Fabricate(:account) }
+  let(:follower_bob) { Fabricate(:account, username: 'bob') }
+  let(:follower_chris) { Fabricate(:account, username: 'curt') }
 
   describe 'GET #index' do
-    let!(:follow0) { follower0.follow!(alice) }
-    let!(:follow1) { follower1.follow!(alice) }
+    let!(:follow_from_bob) { follower_bob.follow!(alice) }
+    let!(:follow_from_chris) { follower_chris.follow!(alice) }
 
     context 'when format is html' do
       subject(:response) { get :index, params: { account_username: alice.username, format: :html } }
 
-      it 'assigns follows' do
-        expect(response).to have_http_status(200)
+      context 'when account is permanently suspended' do
+        before do
+          alice.suspend!
+          alice.deletion_request.destroy
+        end
 
-        assigned = assigns(:follows).to_a
-        expect(assigned.size).to eq 2
-        expect(assigned[0]).to eq follow1
-        expect(assigned[1]).to eq follow0
+        it 'returns http gone' do
+          expect(response).to have_http_status(410)
+        end
       end
 
-      it 'does not assign blocked users' do
-        user = Fabricate(:user)
-        user.account.block!(follower0)
-        sign_in(user)
+      context 'when account is temporarily suspended' do
+        before do
+          alice.suspend!
+        end
 
-        expect(response).to have_http_status(200)
-
-        assigned = assigns(:follows).to_a
-        expect(assigned.size).to eq 1
-        expect(assigned[0]).to eq follow1
+        it 'returns http forbidden' do
+          expect(response).to have_http_status(403)
+        end
       end
     end
 
     context 'when format is json' do
-      subject(:response) { get :index, params: { account_username: alice.username, page: page, format: :json } }
-      subject(:body) { JSON.parse(response.body) }
+      let(:response) { get :index, params: { account_username: alice.username, page: page, format: :json } }
 
       context 'with page' do
         let(:page) { 1 }
 
         it 'returns followers' do
           expect(response).to have_http_status(200)
-          expect(body['totalItems']).to eq 2
-          expect(body['partOf']).to be_present
+          expect(response.parsed_body)
+            .to include(
+              orderedItems: contain_exactly(
+                ActivityPub::TagManager.instance.uri_for(follow_from_bob.account),
+                ActivityPub::TagManager.instance.uri_for(follow_from_chris.account)
+              ),
+              totalItems: eq(2),
+              partOf: be_present
+            )
+        end
+
+        context 'when account hides their network' do
+          before { alice.update(hide_collections: true) }
+
+          it 'returns forbidden response' do
+            expect(response)
+              .to have_http_status(403)
+            expect(response.parsed_body)
+              .to include(error: /forbidden/i)
+          end
+        end
+
+        context 'when request is signed in and user blocks an account' do
+          let(:account) { Fabricate :account }
+
+          before do
+            Fabricate :block, account:, target_account: follower_bob
+            sign_in(account.user)
+          end
+
+          it 'returns followers without blocked' do
+            expect(response)
+              .to have_http_status(200)
+            expect(response.parsed_body)
+              .to include(
+                orderedItems: contain_exactly(
+                  include(follow_from_chris.account.id.to_s)
+                )
+              )
+          end
+        end
+
+        context 'when account is permanently suspended' do
+          before do
+            alice.suspend!
+            alice.deletion_request.destroy
+          end
+
+          it 'returns http gone' do
+            expect(response).to have_http_status(410)
+          end
+        end
+
+        context 'when account is temporarily suspended' do
+          before do
+            alice.suspend!
+          end
+
+          it 'returns http forbidden' do
+            expect(response).to have_http_status(403)
+          end
         end
       end
 
@@ -55,8 +115,51 @@ describe FollowerAccountsController do
 
         it 'returns followers' do
           expect(response).to have_http_status(200)
-          expect(body['totalItems']).to eq 2
-          expect(body['partOf']).to be_blank
+          expect(response.parsed_body)
+            .to include(
+              totalItems: eq(2)
+            )
+            .and not_include(:partOf)
+        end
+
+        context 'when account hides their network' do
+          before do
+            alice.update(hide_collections: true)
+          end
+
+          it 'returns followers count but not any items' do
+            expect(response.parsed_body)
+              .to include(
+                totalItems: eq(2)
+              )
+              .and not_include(
+                :items,
+                :orderedItems,
+                :first,
+                :last
+              )
+          end
+        end
+
+        context 'when account is permanently suspended' do
+          before do
+            alice.suspend!
+            alice.deletion_request.destroy
+          end
+
+          it 'returns http gone' do
+            expect(response).to have_http_status(410)
+          end
+        end
+
+        context 'when account is temporarily suspended' do
+          before do
+            alice.suspend!
+          end
+
+          it 'returns http forbidden' do
+            expect(response).to have_http_status(403)
+          end
         end
       end
     end

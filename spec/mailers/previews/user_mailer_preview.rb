@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 # Preview all emails at http://localhost:3000/rails/mailers/user_mailer
 
 class UserMailerPreview < ActionMailer::Preview
@@ -33,6 +35,28 @@ class UserMailerPreview < ActionMailer::Preview
     UserMailer.two_factor_recovery_codes_changed(User.first)
   end
 
+  # Preview this email at http://localhost:3000/rails/mailers/user_mailer/webauthn_enabled
+  def webauthn_enabled
+    UserMailer.webauthn_enabled(User.first)
+  end
+
+  # Preview this email at http://localhost:3000/rails/mailers/user_mailer/webauthn_disabled
+  def webauthn_disabled
+    UserMailer.webauthn_disabled(User.first)
+  end
+
+  # Preview this email at http://localhost:3000/rails/mailers/user_mailer/webauthn_credential_added
+  def webauthn_credential_added
+    webauthn_credential = WebauthnCredential.new(nickname: 'USB Key')
+    UserMailer.webauthn_credential_added(User.first, webauthn_credential)
+  end
+
+  # Preview this email at http://localhost:3000/rails/mailers/user_mailer/webauthn_credential_deleted
+  def webauthn_credential_deleted
+    webauthn_credential = WebauthnCredential.new(nickname: 'USB Key')
+    UserMailer.webauthn_credential_deleted(User.first, webauthn_credential)
+  end
+
   # Preview this email at http://localhost:3000/rails/mailers/user_mailer/reconfirmation_instructions
   def reconfirmation_instructions
     user = User.first
@@ -57,11 +81,31 @@ class UserMailerPreview < ActionMailer::Preview
 
   # Preview this email at http://localhost:3000/rails/mailers/user_mailer/warning
   def warning
-    UserMailer.warning(User.first, AccountWarning.new(text: '', action: :silence), [Status.first.id])
+    UserMailer.warning(User.first, AccountWarning.last)
   end
 
-  # Preview this email at http://localhost:3000/rails/mailers/user_mailer/sign_in_token
-  def sign_in_token
-    UserMailer.sign_in_token(User.first.tap { |user| user.generate_sign_in_token }, '127.0.0.1', 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:75.0) Gecko/20100101 Firefox/75.0', Time.now.utc)
+  # Preview this email at http://localhost:3000/rails/mailers/user_mailer/appeal_approved
+  def appeal_approved
+    UserMailer.appeal_approved(User.first, Appeal.last)
+  end
+
+  # Preview this email at http://localhost:3000/rails/mailers/user_mailer/suspicious_sign_in
+  def suspicious_sign_in
+    UserMailer.suspicious_sign_in(User.first, '127.0.0.1', 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:75.0) Gecko/20100101 Firefox/75.0', Time.now.utc)
+  end
+
+  # Preview this email at http://localhost:3000/rails/mailers/user_mailer/failed_2fa
+  def failed_2fa
+    UserMailer.failed_2fa(User.first, '127.0.0.1', 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:75.0) Gecko/20100101 Firefox/75.0', Time.now.utc)
+  end
+
+  # Preview this email at http://localhost:3000/rails/mailers/user_mailer/terms_of_service_changed
+  def terms_of_service_changed
+    UserMailer.terms_of_service_changed(User.first, TermsOfService.live.first)
+  end
+
+  # Preview this email at http://localhost:3000/rails/mailers/user_mailer/announcement_published
+  def announcement_published
+    UserMailer.announcement_published(User.first, Announcement.last)
   end
 end

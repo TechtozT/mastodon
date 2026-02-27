@@ -1,11 +1,9 @@
 # frozen_string_literal: true
 
-class Api::V1::Statuses::FavouritesController < Api::BaseController
-  include Authorization
-
+class Api::V1::Statuses::FavouritesController < Api::V1::Statuses::BaseController
   before_action -> { doorkeeper_authorize! :write, :'write:favourites' }
   before_action :require_user!
-  before_action :set_status
+  skip_before_action :set_status, only: [:destroy]
 
   def create
     FavouriteService.new.call(current_account, @status)
@@ -13,16 +11,21 @@ class Api::V1::Statuses::FavouritesController < Api::BaseController
   end
 
   def destroy
-    UnfavouriteWorker.perform_async(current_account.id, @status.id)
-    render json: @status, serializer: REST::StatusSerializer, relationships: StatusRelationshipsPresenter.new([@status], current_account.id, favourites_map: { @status.id => false })
-  end
+    fav = current_account.favourites.find_by(status_id: params[:status_id])
 
-  private
+    if fav
+      @status = fav.status
+      count = [@status.favourites_count - 1, 0].max
+      UnfavouriteWorker.perform_async(current_account.id, @status.id)
+    else
+      @status = Status.find(params[:status_id])
+      count = @status.favourites_count
+      authorize @status, :show?
+    end
 
-  def set_status
-    @status = Status.find(params[:status_id])
-    authorize @status, :show?
-  rescue Mastodon::NotPermittedError
+    relationships = StatusRelationshipsPresenter.new([@status], current_account.id, favourites_map: { @status.id => false }, attributes_map: { @status.id => { favourites_count: count } })
+    render json: @status, serializer: REST::StatusSerializer, relationships: relationships
+  rescue ActiveRecord::RecordNotFound, Mastodon::NotPermittedError
     not_found
   end
 end

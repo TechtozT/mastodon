@@ -3,7 +3,6 @@
 class RemoteFollow
   include ActiveModel::Validations
   include RoutingHelper
-  include WebfingerHelper
 
   attr_accessor :acct, :addressable_template
 
@@ -36,13 +35,11 @@ class RemoteFollow
 
     username, domain = value.strip.gsub(/\A@/, '').split('@')
 
-    domain = begin
-      if TagManager.instance.local_domain?(domain)
-        nil
-      else
-        TagManager.instance.normalize_domain(domain)
-      end
-    end
+    domain = if TagManager.instance.local_domain?(domain)
+               nil
+             else
+               TagManager.instance.normalize_domain(domain)
+             end
 
     [username, domain].compact.join('@')
   rescue Addressable::URI::InvalidURIError
@@ -56,7 +53,7 @@ class RemoteFollow
 
     if domain.nil?
       @addressable_template = Addressable::Template.new("#{authorize_interaction_url}?uri={uri}")
-    elsif redirect_url_link.nil? || redirect_url_link.template.nil?
+    elsif redirect_uri_template.nil?
       missing_resource_error
     else
       @addressable_template = Addressable::Template.new(redirect_uri_template)
@@ -64,16 +61,12 @@ class RemoteFollow
   end
 
   def redirect_uri_template
-    redirect_url_link.template
-  end
-
-  def redirect_url_link
-    acct_resource&.link('http://ostatus.org/schema/1.0/subscribe')
+    acct_resource&.link('http://ostatus.org/schema/1.0/subscribe', 'template')
   end
 
   def acct_resource
-    @acct_resource ||= webfinger!("acct:#{acct}")
-  rescue Goldfinger::Error, HTTP::ConnectionError
+    @acct_resource ||= Webfinger.new("acct:#{acct}").perform
+  rescue Webfinger::Error, *Mastodon::HTTP_CONNECTION_ERRORS
     nil
   end
 

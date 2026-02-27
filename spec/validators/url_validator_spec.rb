@@ -2,33 +2,46 @@
 
 require 'rails_helper'
 
-RSpec.describe UrlValidator, type: :validator do
-  describe '#validate_each' do
-    before do
-      allow(validator).to receive(:compliant?).with(value) { compliant }
-      validator.validate_each(record, attribute, value)
+RSpec.describe URLValidator do
+  subject { record_class.new }
+
+  let(:record_class) do
+    Class.new do
+      include ActiveModel::Validations
+
+      def self.name = 'Record'
+
+      attr_accessor :profile
+
+      validates :profile, url: true
     end
+  end
 
-    let(:validator) { described_class.new(attributes: [attribute]) }
-    let(:record)    { double(errors: errors) }
-    let(:errors)    { double(add: nil) }
-    let(:value)     { '' }
-    let(:attribute) { :foo }
+  context 'with a nil value' do
+    it { is_expected.to_not allow_value(nil).for(:profile).with_message(:invalid) }
+  end
 
-    context 'unless compliant?' do
-      let(:compliant) { false }
+  context 'with an invalid url scheme' do
+    let(:invalid_scheme_url) { 'ftp://example.com/page' }
 
-      it 'calls errors.add' do
-        expect(errors).to have_received(:add).with(attribute, I18n.t('applications.invalid_url'))
-      end
-    end
+    it { is_expected.to_not allow_value(invalid_scheme_url).for(:profile).with_message(:invalid) }
+  end
 
-    context 'if compliant?' do
-      let(:compliant) { true }
+  context 'without a hostname' do
+    let(:no_hostname_url) { 'https:///page' }
 
-      it 'not calls errors.add' do
-        expect(errors).not_to have_received(:add).with(attribute, any_args)
-      end
-    end
+    it { is_expected.to_not allow_value(no_hostname_url).for(:profile).with_message(:invalid) }
+  end
+
+  context 'with an unparseable value' do
+    let(:non_numeric_port_url) { 'https://host:port/page' }
+
+    it { is_expected.to_not allow_value(non_numeric_port_url).for(:profile).with_message(:invalid) }
+  end
+
+  context 'with a valid url' do
+    let(:valid_url) { 'https://example.com/page' }
+
+    it { is_expected.to allow_value(valid_url).for(:profile) }
   end
 end

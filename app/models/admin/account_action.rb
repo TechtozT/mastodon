@@ -1,52 +1,22 @@
 # frozen_string_literal: true
 
-class Admin::AccountAction
-  include ActiveModel::Model
-  include AccountableConcern
-  include Authorization
-
+class Admin::AccountAction < Admin::BaseAction
   TYPES = %w(
     none
     disable
+    sensitive
     silence
     suspend
   ).freeze
 
   attr_accessor :target_account,
-                :current_account,
-                :type,
-                :text,
-                :report_id,
                 :warning_preset_id
 
-  attr_reader :warning, :send_email_notification, :include_statuses
+  attribute :include_statuses, :boolean, default: true
 
-  def send_email_notification=(value)
-    @send_email_notification = ActiveModel::Type::Boolean.new.cast(value)
-  end
+  alias include_statuses? include_statuses
 
-  def include_statuses=(value)
-    @include_statuses = ActiveModel::Type::Boolean.new.cast(value)
-  end
-
-  def save!
-    ApplicationRecord.transaction do
-      process_action!
-      process_warning!
-    end
-
-    process_email!
-    process_reports!
-    process_queue!
-  end
-
-  def report
-    @report ||= Report.find(report_id) if report_id.present?
-  end
-
-  def with_report?
-    !report.nil?
-  end
+  validates :target_account, presence: true
 
   class << self
     def types_for_account(account)
@@ -56,35 +26,44 @@ class Admin::AccountAction
         TYPES - %w(none disable)
       end
     end
+
+    def disabled_types_for_account(account)
+      if account.suspended_locally?
+        %w(silence suspend)
+      elsif account.silenced?
+        %w(silence)
+      end
+    end
+
+    def i18n_scope
+      :activerecord
+    end
   end
 
   private
 
   def process_action!
+    ApplicationRecord.transaction do
+      handle_type!
+      process_strike!
+      process_reports!
+    end
+
+    process_notification!
+    process_queue!
+  end
+
+  def handle_type!
     case type
     when 'disable'
       handle_disable!
+    when 'sensitive'
+      handle_sensitive!
     when 'silence'
       handle_silence!
     when 'suspend'
       handle_suspend!
     end
-  end
-
-  def process_warning!
-    return unless warnable?
-
-    authorize(target_account, :warn?)
-
-    @warning = AccountWarning.create!(target_account: target_account,
-                                      account: current_account,
-                                      action: type,
-                                      text: text_for_warning)
-
-    # A log entry is only interesting if the warning contains
-    # custom text from someone. Otherwise it's just noise.
-
-    log_action(:create, warning) if warning.text.present?
   end
 
   def process_reports!
@@ -95,9 +74,8 @@ class Admin::AccountAction
     # Otherwise, we will mark all unresolved reports about
     # the account as resolved.
 
-    reports.each { |report| authorize(report, :update?) }
-
     reports.each do |report|
+      authorize(report, :update?)
       log_action(:resolve, report)
       report.resolve!(current_account)
     end
@@ -109,6 +87,12 @@ class Admin::AccountAction
     target_account.user&.disable!
   end
 
+  def handle_sensitive!
+    authorize(target_account, :sensitive?)
+    log_action(:sensitive, target_account)
+    target_account.sensitize!
+  end
+
   def handle_silence!
     authorize(target_account, :silence?)
     log_action(:silence, target_account)
@@ -118,7 +102,7 @@ class Admin::AccountAction
   def handle_suspend!
     authorize(target_account, :suspend?)
     log_action(:suspend, target_account)
-    target_account.suspend!
+    target_account.suspend!(origin: :local)
   end
 
   def text_for_warning
@@ -133,26 +117,16 @@ class Admin::AccountAction
     queue_suspension_worker! if type == 'suspend'
   end
 
-  def process_email!
-    UserMailer.warning(target_account.user, warning, status_ids).deliver_now! if warnable?
-  end
-
-  def warnable?
-    send_email_notification && target_account.local?
-  end
-
   def status_ids
-    @report.status_ids if @report && include_statuses
+    report.status_ids if with_report? && include_statuses?
   end
 
   def reports
-    @reports ||= begin
-      if type == 'none' && with_report?
-        [report]
-      else
-        Report.where(target_account: target_account).unresolved
-      end
-    end
+    @reports ||= if type == 'none'
+                   with_report? ? [report] : []
+                 else
+                   target_account.targeted_reports.unresolved
+                 end
   end
 
   def warning_preset

@@ -5,78 +5,68 @@ class ActivityPub::Activity::Delete < ActivityPub::Activity
     if @account.uri == object_uri
       delete_person
     else
-      delete_note
+      delete_object
     end
   end
 
   private
 
   def delete_person
-    lock_or_return("delete_in_progress:#{@account.id}") do
-      SuspendAccountService.new.call(@account, reserve_username: false)
+    with_redis_lock("delete_in_progress:#{@account.id}", autorelease: 2.hours, raise_on_failure: false) do
+      DeleteAccountService.new.call(@account, reserve_username: false, skip_activitypub: true)
     end
   end
 
-  def delete_note
+  def delete_object
     return if object_uri.nil?
 
-    unless invalid_origin?(object_uri)
-      RedisLock.acquire(lock_options) { |_lock| delete_later!(object_uri) }
-      Tombstone.find_or_create_by(uri: object_uri, account: @account)
-    end
+    with_redis_lock("delete_status_in_progress:#{object_uri}", raise_on_failure: false) do
+      unless non_matching_uri_hosts?(@account.uri, object_uri)
+        # This lock ensures a concurrent `ActivityPub::Activity::Create` either
+        # does not create a status at all, or has finished saving it to the
+        # database before we try to load it.
+        # Without the lock, `delete_later!` could be called after `delete_arrived_first?`
+        # and `Status.find` before `Status.create!`
+        with_redis_lock("create:#{object_uri}") { delete_later!(object_uri) }
 
+        Tombstone.find_or_create_by(uri: object_uri, account: @account)
+      end
+
+      case @object['type']
+      when 'QuoteAuthorization'
+        revoke_quote
+      when 'Note', 'Question'
+        delete_status
+      else
+        delete_status || revoke_quote
+      end
+    end
+  end
+
+  def delete_status
     @status   = Status.find_by(uri: object_uri, account: @account)
     @status ||= Status.find_by(uri: @object['atomUri'], account: @account) if @object.is_a?(Hash) && @object['atomUri'].present?
 
     return if @status.nil?
 
-    if @status.distributable?
-      forward_for_reply
-      forward_for_reblogs
-    end
-
-    delete_now!
-  end
-
-  def forward_for_reblogs
-    return if @json['signature'].blank?
-
-    rebloggers_ids = @status.reblogs.includes(:account).references(:account).merge(Account.local).pluck(:account_id)
-    inboxes        = Account.where(id: ::Follow.where(target_account_id: rebloggers_ids).select(:account_id)).inboxes - [@account.preferred_inbox_url]
-
-    ActivityPub::LowPriorityDeliveryWorker.push_bulk(inboxes) do |inbox_url|
-      [payload, rebloggers_ids.first, inbox_url]
-    end
-  end
-
-  def replied_to_status
-    return @replied_to_status if defined?(@replied_to_status)
-    @replied_to_status = @status.thread
-  end
-
-  def reply_to_local?
-    !replied_to_status.nil? && replied_to_status.account.local?
-  end
-
-  def forward_for_reply
-    return unless @json['signature'].present? && reply_to_local?
-
-    inboxes = replied_to_status.account.followers.inboxes - [@account.preferred_inbox_url]
-
-    ActivityPub::LowPriorityDeliveryWorker.push_bulk(inboxes) do |inbox_url|
-      [payload, replied_to_status.account_id, inbox_url]
-    end
-  end
-
-  def delete_now!
+    forwarder.forward! if forwarder.forwardable?
     RemoveStatusService.new.call(@status, redraft: false)
+
+    true
   end
 
-  def payload
-    @payload ||= Oj.dump(@json)
+  def revoke_quote
+    @quote = Quote.find_by(approval_uri: object_uri, quoted_account: @account, state: [:pending, :accepted])
+    return if @quote.nil?
+
+    ActivityPub::Forwarder.new(@account, @json, @quote.status).forward! if @quote.status.present?
+
+    @quote.reject!
+
+    DistributionWorker.perform_async(@quote.status_id, { 'update' => true }) if @quote.status.present?
   end
 
-  def lock_options
-    { redis: Redis.current, key: "create:#{object_uri}" }
+  def forwarder
+    @forwarder ||= ActivityPub::Forwarder.new(@account, @json, @status)
   end
 end

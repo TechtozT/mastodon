@@ -1,3 +1,5 @@
+@use 'variables' as *;
+
 .dashboard__counters {
   display: flex;
   flex-wrap: wrap;
@@ -13,8 +15,9 @@
     & > div,
     & > a {
       padding: 20px;
-      background: lighten($ui-base-color, 4%);
+      background: var(--color-bg-primary);
       border-radius: 4px;
+      border: 1px solid var(--color-border-primary);
       box-sizing: border-box;
       height: 100%;
     }
@@ -27,7 +30,7 @@
       &:hover,
       &:focus,
       &:active {
-        background: lighten($ui-base-color, 8%);
+        background: var(--color-bg-brand-softer);
       }
     }
   }
@@ -37,9 +40,7 @@
     text-align: center;
     font-weight: 500;
     font-size: 24px;
-    line-height: 21px;
-    color: $primary-text-color;
-    font-family: $font-display, sans-serif;
+    color: var(--color-text-primary);
     margin-bottom: 20px;
     line-height: 30px;
   }
@@ -50,29 +51,70 @@
 
   &__label {
     font-size: 14px;
-    color: $darker-text-color;
+    color: var(--color-text-secondary);
     text-align: center;
     font-weight: 500;
   }
 }
 
-.dashboard__widgets {
-  display: flex;
-  flex-wrap: wrap;
-  margin: 0 -5px;
+.dashboard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
 
-  & > div {
-    flex: 0 0 33.333%;
-    margin-bottom: 20px;
+  @media screen and (width <= 1350px) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
 
-    & > div {
-      padding: 0 5px;
+  &__item {
+    &--span-double-column {
+      grid-column: span 2;
+    }
+
+    &--span-double-row {
+      grid-row: span 2;
+    }
+
+    h4 {
+      padding-top: 20px;
     }
   }
 
-  a:not(.name-tag) {
-    color: $ui-secondary-color;
-    font-weight: 500;
+  &__quick-access {
+    display: flex;
+    align-items: baseline;
+    border-radius: 4px;
+    background: var(--color-bg-brand-base);
+    color: var(--color-text-on-brand-base);
+    transition: all 100ms ease-in;
+    font-size: 14px;
+    padding: 8px 16px;
     text-decoration: none;
+    margin-bottom: 4px;
+
+    &:active,
+    &:focus,
+    &:hover {
+      background-color: var(--color-bg-brand-base-hover);
+      transition: all 200ms ease-out;
+    }
+
+    &.positive {
+      background: var(--color-bg-success-softer);
+      color: var(--color-text-success);
+    }
+
+    &.negative {
+      background: var(--color-bg-error-softer);
+      color: var(--color-text-error);
+    }
+
+    span {
+      flex: 1 1 auto;
+    }
+
+    strong {
+      font-weight: 700;
+    }
   }
 }

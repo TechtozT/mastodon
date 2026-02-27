@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+
 # == Schema Information
 #
 # Table name: relays
@@ -12,22 +13,28 @@
 #
 
 class Relay < ApplicationRecord
-  validates :inbox_url, presence: true, uniqueness: true, url: true, if: :will_save_change_to_inbox_url?
+  validates :inbox_url, presence: true, uniqueness: true, url: true # rubocop:disable Rails/UniqueValidationWithoutIndex
 
-  enum state: [:idle, :pending, :accepted, :rejected]
+  enum :state, { idle: 0, pending: 1, accepted: 2, rejected: 3 }
 
   scope :enabled, -> { accepted }
+
+  normalizes :inbox_url, with: ->(inbox_url) { inbox_url.strip }
 
   before_destroy :ensure_disabled
 
   alias enabled? accepted?
+
+  def to_log_human_identifier
+    inbox_url
+  end
 
   def enable!
     activity_id = ActivityPub::TagManager.instance.generate_uri_for(nil)
     payload     = Oj.dump(follow_activity(activity_id))
 
     update!(state: :pending, follow_activity_id: activity_id)
-    DeliveryFailureTracker.reset!(inbox_url)
+    reset_delivery_tracker
     ActivityPub::DeliveryWorker.perform_async(payload, some_local_account.id, inbox_url)
   end
 
@@ -36,11 +43,15 @@ class Relay < ApplicationRecord
     payload     = Oj.dump(unfollow_activity(activity_id))
 
     update!(state: :idle, follow_activity_id: nil)
-    DeliveryFailureTracker.reset!(inbox_url)
+    reset_delivery_tracker
     ActivityPub::DeliveryWorker.perform_async(payload, some_local_account.id, inbox_url)
   end
 
   private
+
+  def reset_delivery_tracker
+    DeliveryFailureTracker.reset!(inbox_url)
+  end
 
   def follow_activity(activity_id)
     {

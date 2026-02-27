@@ -2,52 +2,89 @@
 
 require 'rails_helper'
 
-describe StatusLengthValidator do
-  describe '#validate' do
-    it 'does not add errors onto remote statuses' do
-      status = double(local?: false)
-      subject.validate(status)
-      expect(status).not_to receive(:errors)
-    end
+RSpec.describe StatusLengthValidator do
+  subject { Fabricate.build :status }
 
-    it 'does not add errors onto local reblogs' do
-      status = double(local?: false, reblog?: true)
-      subject.validate(status)
-      expect(status).not_to receive(:errors)
-    end
+  before { stub_const 'StatusLengthValidator::MAX_CHARS', 100 }
 
-    it 'adds an error when content warning is over 500 characters' do
-      status = double(spoiler_text: 'a' * 520, text: '', errors: double(add: nil), local?: true, reblog?: false)
-      subject.validate(status)
-      expect(status.errors).to have_received(:add)
-    end
+  let(:over_limit_text) { 'a' * described_class::MAX_CHARS * 2 }
 
-    it 'adds an error when text is over 500 characters' do
-      status = double(spoiler_text: '', text: 'a' * 520, errors: double(add: nil), local?: true, reblog?: false)
-      subject.validate(status)
-      expect(status.errors).to have_received(:add)
-    end
+  context 'when status is remote' do
+    before { subject.update! account: Fabricate(:account, domain: 'host.example') }
 
-    it 'adds an error when text and content warning are over 500 characters total' do
-      status = double(spoiler_text: 'a' * 250, text: 'b' * 251, errors: double(add: nil), local?: true, reblog?: false)
-      subject.validate(status)
-      expect(status.errors).to have_received(:add)
-    end
+    it { is_expected.to allow_value(over_limit_text).for(:text) }
+    it { is_expected.to allow_value(over_limit_text).for(:spoiler_text).against(:text) }
+  end
 
-    it 'counts URLs as 23 characters flat' do
-      text   = ('a' * 476) + " http://#{'b' * 30}.com/example"
-      status = double(spoiler_text: '', text: text, errors: double(add: nil), local?: true, reblog?: false)
+  context 'when status is a local reblog' do
+    before { subject.update! reblog: Fabricate(:status) }
 
-      subject.validate(status)
-      expect(status.errors).to_not have_received(:add)
-    end
+    it { is_expected.to allow_value(over_limit_text).for(:text) }
+    it { is_expected.to allow_value(over_limit_text).for(:spoiler_text).against(:text) }
+  end
 
-    it 'counts only the front part of remote usernames' do
-      text   = ('a' * 475) + " @alice@#{'b' * 30}.com"
-      status = double(spoiler_text: '', text: text, errors: double(add: nil), local?: true, reblog?: false)
+  context 'when text is over character limit' do
+    it { is_expected.to_not allow_value(over_limit_text).for(:text).with_message(too_long_message) }
+  end
 
-      subject.validate(status)
-      expect(status.errors).to_not have_received(:add)
-    end
+  context 'when content warning text is over character limit' do
+    it { is_expected.to_not allow_value(over_limit_text).for(:spoiler_text).against(:text).with_message(too_long_message) }
+  end
+
+  context 'when text and content warning combine to exceed limit' do
+    before { subject.text = 'a' * 50 }
+
+    it { is_expected.to_not allow_value('a' * 55).for(:spoiler_text).against(:text).with_message(too_long_message) }
+  end
+
+  context 'when text has space separated linkable URLs' do
+    let(:text) { [starting_string, example_link].join(' ') }
+
+    it { is_expected.to allow_value(text).for(:text) }
+  end
+
+  context 'when text has non-separated URLs' do
+    let(:text) { [starting_string, example_link].join }
+
+    it { is_expected.to_not allow_value(text).for(:text).with_message(too_long_message) }
+  end
+
+  context 'with excessively long URLs' do
+    let(:text) { "http://example.com/valid?#{'#foo?' * 1000}" }
+
+    it { is_expected.to_not allow_value(text).for(:text).with_message(too_long_message) }
+  end
+
+  context 'when remote account usernames cause limit excess' do
+    let(:text) { ('a' * 75) + " @alice@#{'b' * 30}.com" }
+
+    it { is_expected.to allow_value(text).for(:text) }
+  end
+
+  context 'when remote usernames are attached to long domains' do
+    let(:text) { "@alice@#{'b' * Extractor::MAX_DOMAIN_LENGTH * 2}.com" }
+
+    it { is_expected.to_not allow_value(text).for(:text).with_message(too_long_message) }
+  end
+
+  context 'with special character strings' do
+    let(:multibyte_emoji) { '✨' * described_class::MAX_CHARS }
+    let(:zwj_sequence) { '🏳️‍⚧️' * described_class::MAX_CHARS }
+
+    it { is_expected.to allow_values(multibyte_emoji, zwj_sequence).for(:text) }
+  end
+
+  private
+
+  def too_long_message
+    I18n.t('statuses.over_character_limit', max: described_class::MAX_CHARS)
+  end
+
+  def starting_string
+    'a' * 76
+  end
+
+  def example_link
+    "http://#{'b' * 30}.com/example"
   end
 end

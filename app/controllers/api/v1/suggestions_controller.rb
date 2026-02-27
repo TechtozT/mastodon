@@ -2,23 +2,27 @@
 
 class Api::V1::SuggestionsController < Api::BaseController
   include Authorization
+  include DeprecationConcern
 
-  before_action -> { doorkeeper_authorize! :read }
+  deprecate_api '2021-05-16', only: [:index]
+
+  before_action -> { doorkeeper_authorize! :read, :'read:accounts' }, only: :index
+  before_action -> { doorkeeper_authorize! :write, :'write:accounts' }, except: :index
   before_action :require_user!
-  before_action :set_accounts
+  before_action :set_suggestions
 
   def index
-    render json: @accounts, each_serializer: REST::AccountSerializer
+    render json: @suggestions.get(limit_param(DEFAULT_ACCOUNTS_LIMIT), params[:offset].to_i).map(&:account), each_serializer: REST::AccountSerializer
   end
 
   def destroy
-    PotentialFriendshipTracker.remove(current_account.id, params[:id])
+    @suggestions.remove(params[:id])
     render_empty
   end
 
   private
 
-  def set_accounts
-    @accounts = PotentialFriendshipTracker.get(current_account.id, limit: limit_param(DEFAULT_ACCOUNTS_LIMIT))
+  def set_suggestions
+    @suggestions = AccountSuggestions.new(current_account)
   end
 end
